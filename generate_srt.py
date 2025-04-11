@@ -546,7 +546,9 @@ def get_subtitle_items(timeline):
                             logging.info("Found text in item %d: %s", i, text)
                             subtitle_items.append({
                                 'index': i + 1,
-                                'text': text
+                                'text': text,
+                                'start': item.GetStart(),
+                                'end': item.GetEnd()
                             })
                     except Exception as e:
                         logging.error("Error getting text from item %d: %s", i, str(e))
@@ -562,82 +564,41 @@ def get_subtitle_items(timeline):
 
 def convert_edl_to_srt(edl_path, srt_path, subtitle_items):
     """
-    Convert EDL/CSV format to SRT format, using the actual subtitle text from subtitle_items.
+    Convert EDL/CSV format to SRT format, using the actual subtitle text and timing from subtitle_items.
     """
     try:
-        logging.info(f"Reading EDL from: {edl_path}")
-        with open(edl_path, 'r', encoding='utf-8') as edl_file:
-            # Read CSV with proper handling of quotes
-            reader = csv.DictReader(edl_file)
-            
-            # Calculate subtitle timings based on total duration
-            total_duration = None
-            for row in reader:
-                if row['Record Duration']:
-                    total_duration = row['Record Duration'].strip('"')
-                    break
-            
-            if not total_duration:
-                logging.error("Could not find total duration in EDL")
-                return False
+        logging.info(f"Writing SRT to: {srt_path}")
+        with open(srt_path, 'w', encoding='utf-8') as srt_file:
+            for item in subtitle_items:
+                # Get the text and timing for this subtitle
+                text = item.get('text', '')
+                start_frames = item.get('start', 0)
+                end_frames = item.get('end', 0)
                 
-            # Convert total duration to frames (assuming 24fps)
-            def tc_to_frames(tc):
-                h, m, s, f = map(int, tc.split(':'))
-                return f + s * 24 + m * 24 * 60 + h * 24 * 60 * 60
+                if not text:
+                    continue
                 
-            def frames_to_tc(frames):
-                h = frames // (24 * 60 * 60)
-                frames %= (24 * 60 * 60)
-                m = frames // (24 * 60)
-                frames %= (24 * 60)
-                s = frames // 24
-                f = frames % 24
-                return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+                # Convert frames to timecode (assuming 24fps)
+                def frames_to_srt_tc(frames):
+                    total_seconds = frames / 24  # Convert frames to seconds
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
+                    seconds = int(total_seconds % 60)
+                    milliseconds = int((total_seconds * 1000) % 1000)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
                 
-            total_frames = tc_to_frames(total_duration)
-            frames_per_subtitle = total_frames // len(subtitle_items)
-            
-            logging.info(f"Writing SRT to: {srt_path}")
-            with open(srt_path, 'w', encoding='utf-8') as srt_file:
-                for i, item in enumerate(subtitle_items):
-                    # Get the text for this subtitle
-                    text = item.get('text', '')
-                    if not text:
-                        continue
+                start_srt = frames_to_srt_tc(start_frames)
+                end_srt = frames_to_srt_tc(end_frames)
+                
+                # Write SRT entry
+                srt_file.write(f"{item['index']}\n")
+                srt_file.write(f"{start_srt} --> {end_srt}\n")
+                srt_file.write(f"{text}\n\n")
                         
-                    # Calculate start and end frames for this subtitle
-                    start_frames = i * frames_per_subtitle
-                    end_frames = (i + 1) * frames_per_subtitle
-                    
-                    # Convert frames to timecode
-                    start_tc = frames_to_tc(start_frames)
-                    end_tc = frames_to_tc(end_frames)
-                    
-                    # Convert EDL timecode (HH:MM:SS:FF) to SRT timecode (HH:MM:SS,mmm)
-                    def convert_to_srt_tc(tc):
-                        if not tc:
-                            return "00:00:00,000"
-                        try:
-                            h, m, s, f = map(int, tc.split(':'))
-                            # Convert frames to milliseconds (assuming 24fps)
-                            ms = int(f * 1000 / 24)
-                            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-                        except:
-                            return "00:00:00,000"
-                    
-                    start_srt = convert_to_srt_tc(start_tc)
-                    end_srt = convert_to_srt_tc(end_tc)
-                    
-                    # Write SRT entry
-                    srt_file.write(f"{i+1}\n")
-                    srt_file.write(f"{start_srt} --> {end_srt}\n")
-                    srt_file.write(f"{text}\n\n")
-                        
-        logging.info("Successfully converted EDL to SRT")
+        logging.info("Successfully wrote SRT file")
         return True
     except Exception as e:
-        logging.error(f"Error converting EDL to SRT: {str(e)}")
+        logging.error(f"Error writing SRT file: {str(e)}")
         return False
 
 def generate_srt_for_file(audio_file):
@@ -773,46 +734,20 @@ def generate_srt_for_file(audio_file):
                 return False
             logging.info("Timeline is still valid after generating subtitles")
             
-            # Get subtitle items
+            # Get subtitle items with timing information
             subtitle_items = get_subtitle_items(timeline)
             if not subtitle_items:
                 logging.error("No subtitle items found")
                 return False
             logging.info(f"Found {len(subtitle_items)} subtitle items")
             
-            # Export subtitles to EDL/CSV first
-            logging.info("Exporting subtitles as EDL/CSV...")
-            try:
-                # Ensure the output directory exists
-                os.makedirs(os.path.dirname(txt_path), exist_ok=True)
-                
-                # Try direct SRT export first
-                logging.info(f"Attempting direct SRT export to: {srt_path}")
-                srt_export_result = timeline.Export(srt_path, resolve.EXPORT_TEXT_CSV)
-                if srt_export_result:
-                    logging.info("Successfully exported SRT directly")
-                    return True
-                
-                # If direct export fails, try CSV export and conversion
-                logging.info("Direct SRT export failed, trying CSV export...")
-                csv_export_result = timeline.Export(txt_path, resolve.EXPORT_TEXT_CSV)
-                if csv_export_result:
-                    logging.info(f"Successfully exported CSV to {txt_path}")
-                    
-                    # Convert CSV to SRT
-                    if convert_edl_to_srt(txt_path, srt_path, subtitle_items):
-                        logging.info(f"Successfully converted CSV to SRT at {srt_path}")
-                        return True
-                    else:
-                        logging.error("Failed to convert CSV to SRT")
-                else:
-                    logging.error("Failed to export CSV")
-            except Exception as e:
-                logging.error(f"Error during export: {str(e)}")
+            # Write SRT file directly using subtitle timing information
+            if convert_edl_to_srt(txt_path, srt_path, subtitle_items):
+                logging.info(f"Successfully wrote SRT file to {srt_path}")
+                return True
+            else:
+                logging.error("Failed to write SRT file")
                 return False
-            
-            logging.info("Successfully generated SRT file")
-            return True
             
         except Exception as e:
             logging.error(f"Error during subtitle generation/export: {str(e)}")
