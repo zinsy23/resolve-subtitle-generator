@@ -464,11 +464,48 @@ def verify_timeline_media(timeline):
     
     return True
 
-def create_timeline_with_media(project, media_pool, media_item, timeline_name):
-    """Create a timeline with media using the media pool."""
-    logging.info("Creating timeline with media...")
-    
+def import_audio_file(media_pool, root_folder, audio_file):
+    """Import an audio file into the media pool."""
     try:
+        # Get absolute path and normalize it
+        abs_audio_path = os.path.abspath(audio_file)
+        abs_audio_path = os.path.normpath(abs_audio_path)
+        logging.info(f"Attempting to import from path: {abs_audio_path}")
+        
+        # Import the media
+        media_items = media_pool.ImportMedia([abs_audio_path])
+        if not media_items:
+            logging.error("Failed to import media")
+            return False
+            
+        # Verify the media import
+        if not verify_media_import(media_pool, media_items, abs_audio_path):
+            logging.error("Media import verification failed")
+            return False
+            
+        logging.info("Successfully imported and verified audio file")
+        return True
+    except Exception as e:
+        logging.error(f"Error importing audio file: {str(e)}")
+        return False
+
+def create_timeline_with_media(project, media_pool, timeline_name):
+    """Create a timeline with media from the media pool."""
+    try:
+        # Get the most recently imported clip
+        root_folder = media_pool.GetRootFolder()
+        if not root_folder:
+            logging.error("Failed to get root folder")
+            return None
+            
+        clips = root_folder.GetClipList()
+        if not clips:
+            logging.error("No clips found in media pool")
+            return None
+            
+        # Use the most recent clip
+        media_item = clips[-1]
+        
         # Create timeline with media
         logging.info(f"Creating timeline '{timeline_name}' with media...")
         timeline = media_pool.CreateTimelineFromClips(timeline_name, [media_item])
@@ -601,160 +638,286 @@ def convert_edl_to_srt(edl_path, srt_path, subtitle_items):
         logging.error(f"Error writing SRT file: {str(e)}")
         return False
 
-def generate_srt_for_file(audio_file):
-    """Generate SRT file for the given audio file."""
+def get_current_project():
+    """Get the current project in Resolve."""
     try:
-        # Get the base name without extension for the SRT file
-        base_name = os.path.splitext(audio_file)[0]
-        srt_path = f"{base_name}.srt"
-        txt_path = f"{base_name}.txt"
-        
+        resolve = get_resolve()
+        if not resolve:
+            logging.error("Failed to get Resolve object")
+            return None
+            
+        projectManager = resolve.GetProjectManager()
+        if not projectManager:
+            logging.error("Failed to get project manager")
+            return None
+            
+        currentProject = projectManager.GetCurrentProject()
+        if not currentProject:
+            logging.error("No project is currently open")
+            return None
+            
+        logging.info(f"Using current project: {currentProject.GetName()}")
+        return currentProject
+    except Exception as e:
+        logging.error(f"Error getting current project: {str(e)}")
+        return None
+
+def clear_subtitle_tracks(timeline):
+    """Clear all subtitle tracks in the timeline."""
+    try:
+        subtitle_track_count = timeline.GetTrackCount("subtitle")
+        for track_index in range(1, subtitle_track_count + 1):
+            items = timeline.GetItemListInTrack("subtitle", track_index)
+            for item in items:
+                timeline.DeleteItems([item])
+        logging.info("Cleared all subtitle tracks")
+        return True
+    except Exception as e:
+        logging.error(f"Error clearing subtitle tracks: {str(e)}")
+        return False
+
+def generate_srt_for_file(audio_file):
+    """Generate SRT file for a given audio file."""
+    try:
         logging.info(f"Starting SRT generation for: {audio_file}")
-        logging.info(f"Output SRT will be saved to: {srt_path}")
         
-        # Get Resolve and ensure it's ready
+        # Get output path
+        output_path = os.path.splitext(audio_file)[0] + ".srt"
+        logging.info(f"Output SRT will be saved to: {output_path}")
+        
+        # Get Resolve object
+        logging.info("Getting Resolve object...")
         resolve = get_resolve()
         if not resolve:
             logging.error("Failed to get Resolve object")
             return False
             
-        # Get project manager and create new project
-        logging.info("Getting project manager...")
-        project_manager = resolve.GetProjectManager()
-        if not project_manager:
-            raise Exception("Failed to get project manager")
-        logging.info("Successfully got project manager")
-
-        # Create new project
-        project_name = f"SRT_{int(time.time())}"
-        logging.info(f"Creating new project: {project_name}")
-        project = project_manager.CreateProject(project_name)
+        # Get current project
+        logging.info("Getting current project...")
+        project = get_current_project()
         if not project:
-            raise Exception("Failed to create project")
-        time.sleep(2)  # Increased wait time for project creation
-        logging.info("Successfully created project")
-
-        # Get media pool
-        logging.info("Getting media pool...")
-        media_pool = project.GetMediaPool()
-        if not media_pool:
-            raise Exception("Failed to get media pool")
-        logging.info("Successfully got media pool")
-
-        # Get root folder
-        logging.info("Getting root folder...")
-        root_folder = media_pool.GetRootFolder()
-        if not root_folder:
-            raise Exception("Failed to get root folder")
-        logging.info("Successfully got root folder")
-        
-        # Import audio file
-        logging.info("Importing audio file...")
-        try:
-            # Get absolute path and normalize it
-            abs_audio_path = os.path.abspath(audio_file)
-            abs_audio_path = os.path.normpath(abs_audio_path)
-            logging.info(f"Attempting to import from path: {abs_audio_path}")
-            
-            # Import the media with timeout
-            media_items = import_media_with_timeout(media_pool, abs_audio_path)
-            if not media_items:
-                raise Exception("Failed to import media")
-                
-            # Verify the media import
-            if not verify_media_import(media_pool, media_items, abs_audio_path):
-                raise Exception("Media import verification failed")
-            
-            media_item = media_items[0] if isinstance(media_items, list) else media_items
-            logging.info("Successfully imported and verified audio file")
-            
-            # Create timeline with media
-            timeline_name = os.path.splitext(os.path.basename(audio_file))[0]
-            timeline = create_timeline_with_media(project, media_pool, media_item, timeline_name)
-            if not timeline:
-                raise Exception("Failed to create timeline with media")
-            
-            # Verify project is valid
-            logging.info("Verifying project state...")
-            project_name = project.GetName()
-            if not project_name:
-                logging.error("Project is not valid")
-                return False
-            logging.info(f"Current project: {project_name}")
-            
-            # Ensure we're on the Edit page
-            if not ensure_edit_page(resolve):
-                logging.error("Failed to switch to Edit page")
-                return False
-            logging.info("Successfully switched to Edit page")
-            
-            # Get current timeline and verify
-            timeline = get_current_timeline(resolve)
-            if not timeline:
-                logging.error("Timeline is not valid")
-                return False
-            timeline_name = timeline.GetName()
-            logging.info(f"Current timeline: {timeline_name}")
-            
-            # Setup timeline tracks
-            logging.info("Setting up timeline tracks...")
-            if not setup_timeline_tracks(timeline):
-                logging.error("Failed to setup timeline tracks")
-                return False
-            logging.info("Successfully set up timeline tracks")
-            
-            # Get timeline again to ensure it's still valid
-            timeline = get_current_timeline(resolve)
-            if not timeline:
-                logging.error("Timeline became invalid after track setup")
-                return False
-            logging.info("Timeline is still valid after track setup")
-            
-            # Try to generate subtitles
-            logging.info("Generating subtitles...")
-            try:
-                result = timeline.CreateSubtitlesFromAudio()
-                if not result:
-                    logging.error("Failed to generate subtitles")
-                    return False
-                logging.info("Successfully generated subtitles")
-            except Exception as e:
-                logging.error(f"Error during subtitle generation: {str(e)}")
-                return False
-            
-            # Wait for subtitle generation
-            if not wait_for_subtitles(timeline):
-                logging.error("Failed waiting for subtitles")
-                return False
-            
-            # Get timeline again to ensure it's still valid
-            timeline = get_current_timeline(resolve)
-            if not timeline:
-                logging.error("Timeline became invalid after generating subtitles")
-                return False
-            logging.info("Timeline is still valid after generating subtitles")
-            
-            # Get subtitle items with timing information
-            subtitle_items = get_subtitle_items(timeline)
-            if not subtitle_items:
-                logging.error("No subtitle items found")
-                return False
-            logging.info(f"Found {len(subtitle_items)} subtitle items")
-            
-            # Write SRT file directly using subtitle timing information
-            if convert_edl_to_srt(txt_path, srt_path, subtitle_items):
-                logging.info(f"Successfully wrote SRT file to {srt_path}")
-                return True
-            else:
-                logging.error("Failed to write SRT file")
-                return False
-            
-        except Exception as e:
-            logging.error(f"Error during subtitle generation/export: {str(e)}")
+            logging.error("No project is open. Please open a project first.")
             return False
             
+        # Get media pool
+        logging.info("Getting media pool...")
+        mediaPool = project.GetMediaPool()
+        if not mediaPool:
+            logging.error("Failed to get media pool")
+            return False
+            
+        # Get root folder
+        logging.info("Getting root folder...")
+        rootFolder = mediaPool.GetRootFolder()
+        if not rootFolder:
+            logging.error("Failed to get root folder")
+            return False
+            
+        # Import audio file
+        logging.info("Importing audio file...")
+        if not import_audio_file(mediaPool, rootFolder, audio_file):
+            logging.error("Failed to import audio file")
+            return False
+            
+        # Create timeline with media
+        logging.info("Creating timeline with media...")
+        timeline = create_timeline_with_media(project, mediaPool, os.path.basename(audio_file))
+        if not timeline:
+            logging.error("Failed to create timeline")
+            return False
+            
+        # Verify project state
+        logging.info("Verifying project state...")
+        if not verify_project_state(project, timeline):
+            logging.error("Project state verification failed")
+            return False
+            
+        # Clear existing subtitle tracks
+        logging.info("Clearing existing subtitle tracks...")
+        if not clear_subtitle_tracks(timeline):
+            logging.error("Failed to clear subtitle tracks")
+            return False
+            
+        # Setup timeline tracks
+        logging.info("Setting up timeline tracks...")
+        if not setup_timeline_tracks(timeline):
+            logging.error("Failed to setup timeline tracks")
+            return False
+            
+        # Generate subtitles
+        logging.info("Generating subtitles...")
+        if not create_subtitles_from_audio(timeline):
+            logging.error("Failed to generate subtitles")
+            return False
+            
+        # Wait for subtitle generation
+        logging.info("Waiting for subtitle generation (max 30 attempts)...")
+        subtitle_items = wait_for_subtitle_generation(timeline)
+        if not subtitle_items:
+            logging.error("Failed to generate subtitles")
+            return False
+            
+        # Verify timeline is still valid
+        if not verify_timeline(timeline):
+            logging.error("Timeline is no longer valid after generating subtitles")
+            return False
+            
+        # Get subtitle items
+        subtitle_items = get_subtitle_items(timeline)
+        if not subtitle_items:
+            logging.error("Failed to get subtitle items")
+            return False
+            
+        # Write SRT file
+        logging.info(f"Writing SRT to: {output_path}")
+        if not write_srt_file(subtitle_items, output_path):
+            logging.error("Failed to write SRT file")
+            return False
+            
+        logging.info(f"Successfully wrote SRT file to {output_path}")
+        return True
+        
     except Exception as e:
-        logging.error(f"Error: {str(e)}")
+        logging.error(f"Error in generate_srt_for_file: {str(e)}")
+        return False
+
+def verify_project_state(project, timeline):
+    """Verify that the project and timeline are in a valid state."""
+    try:
+        # Check project is valid
+        if not project:
+            logging.error("Project is None")
+            return False
+            
+        # Check timeline is valid
+        if not timeline:
+            logging.error("Timeline is None")
+            return False
+            
+        # Check timeline is current
+        current_timeline = project.GetCurrentTimeline()
+        if not current_timeline or current_timeline.GetName() != timeline.GetName():
+            logging.error("Timeline is not current")
+            return False
+            
+        # Check timeline has media
+        items = timeline.GetItemListInTrack("audio", 1)
+        if not items:
+            logging.error("No media in timeline")
+            return False
+            
+        logging.info("Project state verification successful")
+        return True
+    except Exception as e:
+        logging.error(f"Error verifying project state: {str(e)}")
+        return False
+
+def verify_timeline(timeline):
+    """Verify that the timeline is valid and has required tracks."""
+    try:
+        if not timeline:
+            logging.error("Timeline is None")
+            return False
+            
+        # Check audio track exists
+        audio_tracks = timeline.GetTrackCount("audio")
+        if audio_tracks < 1:
+            logging.error("No audio tracks found")
+            return False
+            
+        # Check subtitle track exists
+        subtitle_tracks = timeline.GetTrackCount("subtitle")
+        if subtitle_tracks < 1:
+            logging.error("No subtitle tracks found")
+            return False
+            
+        logging.info("Timeline verification successful")
+        return True
+    except Exception as e:
+        logging.error(f"Error verifying timeline: {str(e)}")
+        return False
+
+def wait_for_subtitle_generation(timeline, max_attempts=30):
+    """Wait for subtitle generation with timeout."""
+    wait_time = 2  # Wait time in seconds between checks
+    
+    logging.info(f"Waiting for subtitle generation (max {max_attempts} attempts)...")
+    
+    for attempt in range(max_attempts):
+        try:
+            # Check if timeline is still valid
+            if not timeline:
+                logging.error("Timeline is None")
+                return None
+                
+            # Try to get subtitle items
+            items = timeline.GetItemListInTrack("subtitle", 1)
+            if items and len(items) > 0:
+                logging.info(f"Found {len(items)} subtitle items")
+                return items
+                
+            logging.info(f"Attempt {attempt + 1}/{max_attempts}: No subtitles yet, waiting {wait_time} seconds...")
+            time.sleep(wait_time)
+        except Exception as e:
+            logging.error(f"Error checking for subtitle items: {str(e)}")
+            time.sleep(wait_time)
+            continue
+    
+    logging.error("Timeout waiting for subtitles")
+    return None
+
+def write_srt_file(subtitle_items, output_path):
+    """Write subtitle items to SRT file."""
+    try:
+        with open(output_path, 'w', encoding='utf-8') as srt_file:
+            for i, item in enumerate(subtitle_items, 1):
+                # Get text and timing
+                text = item.get('text', '').strip()
+                if not text:
+                    continue
+                    
+                start_frames = item.get('start', 0)
+                end_frames = item.get('end', 0)
+                
+                # Convert frames to timecode (assuming 24fps)
+                def frames_to_srt_tc(frames):
+                    total_seconds = frames / 24  # Convert frames to seconds
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
+                    seconds = int(total_seconds % 60)
+                    milliseconds = int((total_seconds * 1000) % 1000)
+                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+                
+                start_tc = frames_to_srt_tc(start_frames)
+                end_tc = frames_to_srt_tc(end_frames)
+                
+                # Write SRT entry
+                srt_file.write(f"{i}\n")
+                srt_file.write(f"{start_tc} --> {end_tc}\n")
+                srt_file.write(f"{text}\n\n")
+                
+        logging.info(f"Successfully wrote SRT file to {output_path}")
+        return True
+    except Exception as e:
+        logging.error(f"Error writing SRT file: {str(e)}")
+        return False
+
+def create_subtitles_from_audio(timeline):
+    """Create subtitles from audio in the timeline."""
+    try:
+        # Ensure we're on the Edit page
+        if not ensure_edit_page(get_resolve()):
+            return False
+            
+        # Create subtitles
+        if not timeline.CreateSubtitlesFromAudio():
+            logging.error("Failed to create subtitles from audio")
+            return False
+            
+        logging.info("Successfully initiated subtitle creation")
+        return True
+    except Exception as e:
+        logging.error(f"Error creating subtitles from audio: {str(e)}")
         return False
 
 def main():
@@ -775,6 +938,31 @@ def main():
     
     if not files_to_process:
         print("No files to process")
+        return
+    
+    # Get initial Resolve setup
+    try:
+        resolve = get_resolve()
+        if not resolve:
+            print("Failed to get Resolve object")
+            return
+            
+        project = get_current_project()
+        if not project:
+            print("No project is currently open. Please open a project first.")
+            return
+            
+        media_pool = project.GetMediaPool()
+        if not media_pool:
+            print("Failed to get media pool")
+            return
+            
+        root_folder = media_pool.GetRootFolder()
+        if not root_folder:
+            print("Failed to get root folder")
+            return
+    except Exception as e:
+        print(f"Error setting up Resolve: {str(e)}")
         return
     
     # Process each file sequentially
