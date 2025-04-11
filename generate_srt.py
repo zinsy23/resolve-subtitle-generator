@@ -599,43 +599,74 @@ def get_subtitle_items(timeline):
         logging.error("Error getting subtitle items: %s", str(e))
         return []
 
-def convert_edl_to_srt(edl_path, srt_path, subtitle_items):
-    """
-    Convert EDL/CSV format to SRT format, using the actual subtitle text and timing from subtitle_items.
-    """
+def format_timecode(frames):
+    """Convert frames to SRT timecode format (assuming 24fps)."""
+    total_seconds = frames / 24  # Convert frames to seconds
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = int(total_seconds % 60)
+    milliseconds = int((total_seconds * 1000) % 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+def write_srt_file(srt_path, subtitle_items):
+    """Write subtitle items to an SRT file."""
     try:
-        logging.info(f"Writing SRT to: {srt_path}")
-        with open(srt_path, 'w', encoding='utf-8') as srt_file:
-            for item in subtitle_items:
-                # Get the text and timing for this subtitle
-                text = item.get('text', '')
-                start_frames = item.get('start', 0)
-                end_frames = item.get('end', 0)
+        with open(srt_path, 'w', encoding='utf-8') as f:
+            for i, item in enumerate(subtitle_items, 1):
+                text = item['text']
+                # Split text roughly in half at a space for two lines
+                words = text.split()
+                mid_point = len(words) // 2
+                # Find the closest space to the midpoint
+                for j in range(mid_point, 0, -1):
+                    if ' ' in words[j]:
+                        mid_point = j
+                        break
+                line1 = ' '.join(words[:mid_point + 1])
+                line2 = ' '.join(words[mid_point + 1:])
                 
-                if not text:
-                    continue
+                # Format with line break and bold tags
+                formatted_text = f"<b>{line1}\n{line2}</b>"
                 
-                # Convert frames to timecode (assuming 24fps)
-                def frames_to_srt_tc(frames):
-                    total_seconds = frames / 24  # Convert frames to seconds
-                    hours = int(total_seconds // 3600)
-                    minutes = int((total_seconds % 3600) // 60)
-                    seconds = int(total_seconds % 60)
-                    milliseconds = int((total_seconds * 1000) % 1000)
-                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
-                
-                start_srt = frames_to_srt_tc(start_frames)
-                end_srt = frames_to_srt_tc(end_frames)
-                
-                # Write SRT entry
-                srt_file.write(f"{item['index']}\n")
-                srt_file.write(f"{start_srt} --> {end_srt}\n")
-                srt_file.write(f"{text}\n\n")
-                        
-        logging.info("Successfully wrote SRT file")
+                # Write the subtitle entry
+                f.write(f"{i}\n")
+                f.write(f"{format_timecode(item['start'])} --> {format_timecode(item['end'])}\n")
+                f.write(formatted_text + "\n\n")
+        
+        logging.info(f"Successfully wrote SRT file to {srt_path}")
         return True
     except Exception as e:
         logging.error(f"Error writing SRT file: {str(e)}")
+        return False
+
+def create_subtitles_from_audio(timeline):
+    """Create subtitles from audio in the timeline."""
+    try:
+        # Ensure we're on the Edit page
+        if not ensure_edit_page(get_resolve()):
+            return False
+            
+        # Get Resolve instance for constants
+        resolve = get_resolve()
+        
+        # Set up auto caption settings with proper Resolve constants
+        settings = {
+            resolve.SUBTITLE_LANGUAGE: resolve.AUTO_CAPTION_ENGLISH,
+            resolve.SUBTITLE_CAPTION_PRESET: resolve.AUTO_CAPTION_SUBTITLE_DEFAULT,
+            resolve.SUBTITLE_CHARS_PER_LINE: 42,
+            resolve.SUBTITLE_LINE_BREAK: resolve.AUTO_CAPTION_LINE_DOUBLE,
+            resolve.SUBTITLE_GAP: 0
+        }
+            
+        # Create subtitles with specified settings
+        if not timeline.CreateSubtitlesFromAudio(settings):
+            logging.error("Failed to create subtitles from audio")
+            return False
+            
+        logging.info("Successfully initiated subtitle creation")
+        return True
+    except Exception as e:
+        logging.error(f"Error creating subtitles from audio: {str(e)}")
         return False
 
 def get_current_project():
@@ -661,20 +692,6 @@ def get_current_project():
     except Exception as e:
         logging.error(f"Error getting current project: {str(e)}")
         return None
-
-def clear_subtitle_tracks(timeline):
-    """Clear all subtitle tracks in the timeline."""
-    try:
-        subtitle_track_count = timeline.GetTrackCount("subtitle")
-        for track_index in range(1, subtitle_track_count + 1):
-            items = timeline.GetItemListInTrack("subtitle", track_index)
-            for item in items:
-                timeline.DeleteItems([item])
-        logging.info("Cleared all subtitle tracks")
-        return True
-    except Exception as e:
-        logging.error(f"Error clearing subtitle tracks: {str(e)}")
-        return False
 
 def generate_srt_for_file(audio_file):
     """Generate SRT file for a given audio file."""
@@ -752,8 +769,7 @@ def generate_srt_for_file(audio_file):
             
         # Wait for subtitle generation
         logging.info("Waiting for subtitle generation (max 30 attempts)...")
-        subtitle_items = wait_for_subtitle_generation(timeline)
-        if not subtitle_items:
+        if not wait_for_subtitles(timeline):
             logging.error("Failed to generate subtitles")
             return False
             
@@ -770,7 +786,7 @@ def generate_srt_for_file(audio_file):
             
         # Write SRT file
         logging.info(f"Writing SRT to: {output_path}")
-        if not write_srt_file(subtitle_items, output_path):
+        if not write_srt_file(output_path, subtitle_items):
             logging.error("Failed to write SRT file")
             return False
             
@@ -837,87 +853,18 @@ def verify_timeline(timeline):
         logging.error(f"Error verifying timeline: {str(e)}")
         return False
 
-def wait_for_subtitle_generation(timeline, max_attempts=30):
-    """Wait for subtitle generation with timeout."""
-    wait_time = 2  # Wait time in seconds between checks
-    
-    logging.info(f"Waiting for subtitle generation (max {max_attempts} attempts)...")
-    
-    for attempt in range(max_attempts):
-        try:
-            # Check if timeline is still valid
-            if not timeline:
-                logging.error("Timeline is None")
-                return None
-                
-            # Try to get subtitle items
-            items = timeline.GetItemListInTrack("subtitle", 1)
-            if items and len(items) > 0:
-                logging.info(f"Found {len(items)} subtitle items")
-                return items
-                
-            logging.info(f"Attempt {attempt + 1}/{max_attempts}: No subtitles yet, waiting {wait_time} seconds...")
-            time.sleep(wait_time)
-        except Exception as e:
-            logging.error(f"Error checking for subtitle items: {str(e)}")
-            time.sleep(wait_time)
-            continue
-    
-    logging.error("Timeout waiting for subtitles")
-    return None
-
-def write_srt_file(subtitle_items, output_path):
-    """Write subtitle items to SRT file."""
+def clear_subtitle_tracks(timeline):
+    """Clear all subtitle tracks in the timeline."""
     try:
-        with open(output_path, 'w', encoding='utf-8') as srt_file:
-            for i, item in enumerate(subtitle_items, 1):
-                # Get text and timing
-                text = item.get('text', '').strip()
-                if not text:
-                    continue
-                    
-                start_frames = item.get('start', 0)
-                end_frames = item.get('end', 0)
-                
-                # Convert frames to timecode (assuming 24fps)
-                def frames_to_srt_tc(frames):
-                    total_seconds = frames / 24  # Convert frames to seconds
-                    hours = int(total_seconds // 3600)
-                    minutes = int((total_seconds % 3600) // 60)
-                    seconds = int(total_seconds % 60)
-                    milliseconds = int((total_seconds * 1000) % 1000)
-                    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
-                
-                start_tc = frames_to_srt_tc(start_frames)
-                end_tc = frames_to_srt_tc(end_frames)
-                
-                # Write SRT entry
-                srt_file.write(f"{i}\n")
-                srt_file.write(f"{start_tc} --> {end_tc}\n")
-                srt_file.write(f"{text}\n\n")
-                
-        logging.info(f"Successfully wrote SRT file to {output_path}")
+        subtitle_track_count = timeline.GetTrackCount("subtitle")
+        for track_index in range(1, subtitle_track_count + 1):
+            items = timeline.GetItemListInTrack("subtitle", track_index)
+            for item in items:
+                timeline.DeleteItems([item])
+        logging.info("Cleared all subtitle tracks")
         return True
     except Exception as e:
-        logging.error(f"Error writing SRT file: {str(e)}")
-        return False
-
-def create_subtitles_from_audio(timeline):
-    """Create subtitles from audio in the timeline."""
-    try:
-        # Ensure we're on the Edit page
-        if not ensure_edit_page(get_resolve()):
-            return False
-            
-        # Create subtitles
-        if not timeline.CreateSubtitlesFromAudio():
-            logging.error("Failed to create subtitles from audio")
-            return False
-            
-        logging.info("Successfully initiated subtitle creation")
-        return True
-    except Exception as e:
-        logging.error(f"Error creating subtitles from audio: {str(e)}")
+        logging.error(f"Error clearing subtitle tracks: {str(e)}")
         return False
 
 def main():
