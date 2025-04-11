@@ -566,38 +566,41 @@ def get_current_timeline(resolve):
         return None
 
 def get_subtitle_items(timeline):
-    """Get subtitle items and their text from the timeline"""
+    """Get subtitle items from the timeline."""
     try:
-        subtitle_items = []
+        # Get subtitle track
+        subtitle_track_count = timeline.GetTrackCount("subtitle")
+        if subtitle_track_count < 1:
+            logging.error("No subtitle tracks found")
+            return None
+            
+        # Get items from first subtitle track
+        items = timeline.GetItemListInTrack("subtitle", 1)
+        if not items:
+            logging.error("No items found in subtitle track")
+            return None
+            
+        logging.info(f"Found {len(items)} items in subtitle track")
         
-        # Try to get items in subtitle track
-        try:
-            items = timeline.GetItemListInTrack("subtitle", 1)
-            if items:
-                logging.info("Found %d items in subtitle track", len(items))
-                for i, item in enumerate(items):
-                    try:
-                        # Try to get text using GetName
-                        text = item.GetName()
-                        if text:
-                            logging.info("Found text in item %d: %s", i, text)
-                            subtitle_items.append({
-                                'index': i + 1,
-                                'text': text,
-                                'start': item.GetStart(),
-                                'end': item.GetEnd()
-                            })
-                    except Exception as e:
-                        logging.error("Error getting text from item %d: %s", i, str(e))
-            else:
-                logging.info("No items found in subtitle track")
-        except Exception as e:
-            logging.error("Error getting items from subtitle track: %s", str(e))
+        # Extract text and timing from items
+        subtitle_items = []
+        for i, item in enumerate(items):
+            text = item.GetName()
+            logging.info(f"Raw text from Resolve (item {i}): {repr(text)}")  # Use repr to show special characters
+            start = item.GetStart()
+            end = item.GetEnd()
+            subtitle_items.append({
+                'text': text,
+                'start': start,
+                'end': end,
+                'index': i + 1
+            })
+            logging.info(f"Found text in item {i}: {text}")
             
         return subtitle_items
     except Exception as e:
-        logging.error("Error getting subtitle items: %s", str(e))
-        return []
+        logging.error(f"Error getting subtitle items: {str(e)}")
+        return None
 
 def format_timecode(frames):
     """Convert frames to SRT timecode format (assuming 24fps)."""
@@ -614,19 +617,10 @@ def write_srt_file(srt_path, subtitle_items):
         with open(srt_path, 'w', encoding='utf-8') as f:
             for i, item in enumerate(subtitle_items, 1):
                 text = item['text']
-                # Split text roughly in half at a space for two lines
-                words = text.split()
-                mid_point = len(words) // 2
-                # Find the closest space to the midpoint
-                for j in range(mid_point, 0, -1):
-                    if ' ' in words[j]:
-                        mid_point = j
-                        break
-                line1 = ' '.join(words[:mid_point + 1])
-                line2 = ' '.join(words[mid_point + 1:])
-                
+                # Split on Resolve's line separator character (U+2028)
+                lines = text.split('\u2028')
                 # Format with line break and bold tags
-                formatted_text = f"<b>{line1}\n{line2}</b>"
+                formatted_text = f"<b>{lines[0]}\n{lines[1]}</b>" if len(lines) > 1 else f"<b>{text}</b>"
                 
                 # Write the subtitle entry
                 f.write(f"{i}\n")
