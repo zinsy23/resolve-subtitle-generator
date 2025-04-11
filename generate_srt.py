@@ -758,71 +758,43 @@ def generate_srt_for_file(audio_file):
         return False
 
 def main():
-    """Main function to process audio files and generate SRT files."""
-    print("\nStarting SRT generation process...\n")
+    # Get files to process
+    if len(sys.argv) > 1:
+        # Process files provided as arguments
+        files_to_process = []
+        for arg in sys.argv[1:]:
+            if '*' in arg or '?' in arg:
+                # Expand wildcards
+                files_to_process.extend(glob.glob(arg))
+            else:
+                files_to_process.append(arg)
+    else:
+        # Process all MP3 files in samples directory
+        samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
+        files_to_process = [os.path.join(samples_dir, f) for f in os.listdir(samples_dir) if f.endswith('.MP3')]
     
-    try:
-        # Setup environment
-        print("Setting up Resolve environment...\n")
-        print("Environment Setup:")
-        print(f"RESOLVE_SCRIPT_API: {os.getenv('RESOLVE_SCRIPT_API')}")
-        print(f"RESOLVE_SCRIPT_LIB: {os.getenv('RESOLVE_SCRIPT_LIB')}")
-        print(f"Python Path: {sys.path}\n")
-        
-        print("\nImporting Resolve script module...")
-        
-        # Get Resolve instance
-        resolve = get_resolve()
-        if not resolve:
-            print("Could not get Resolve instance. Is DaVinci Resolve running?")
-            return
+    if not files_to_process:
+        print("No files to process")
+        return
+    
+    # Process each file sequentially
+    successful = 0
+    for file_path in files_to_process:
+        try:
+            print(f"\nProcessing {os.path.basename(file_path)}...")
             
-        # Get project manager
-        project_manager = resolve.GetProjectManager()
-        if not project_manager:
-            print("Could not get Project Manager")
-            return
-            
-        # Process file arguments
-        print("\nProcessing file arguments...\n")
-        
-        if len(sys.argv) < 2:
-            print("Usage: python generate_srt.py <audio_file_or_pattern>")
-            print("Example: python generate_srt.py \"*.mp3\"")
-            return
-            
-        # Get list of audio files
-        pattern = sys.argv[1]
-        audio_files = glob.glob(pattern)
-        
-        if not audio_files:
-            print(f"No files found matching pattern: {pattern}")
-            return
-            
-        print(f"Found {len(audio_files)} audio file(s) to process:")
-        for file in audio_files:
-            print(f"- {file}")
-        print()
-        
-        # Process each file
-        success_count = 0
-        for audio_file in audio_files:
-            print(f"\nProcessing file: {audio_file}")
-            try:
-                if generate_srt_for_file(audio_file):
-                    success_count += 1
-                    print(f"Successfully generated SRT for {audio_file}")
-                else:
-                    print(f"Failed to generate SRT for {audio_file}")
-            except Exception as e:
-                print(f"Error processing {audio_file}: {str(e)}")
-                logging.exception("Detailed error:")
+            # Generate SRT
+            if generate_srt_for_file(file_path):
+                successful += 1
+                print(f"Successfully generated SRT for {os.path.basename(file_path)}")
+            else:
+                print(f"Failed to generate SRT for {os.path.basename(file_path)}")
                 
-        print(f"\nProcessed {len(audio_files)} file(s), {success_count} successful")
-        
-    except Exception as e:
-        print(f"\nError in main execution: {str(e)}")
-        logging.exception("Detailed error:")
-        
+        except Exception as e:
+            print(f"Error processing {os.path.basename(file_path)}: {str(e)}")
+            continue
+    
+    print(f"\nProcessed {len(files_to_process)} file(s), {successful} successful")
+
 if __name__ == "__main__":
     main() 
