@@ -9,6 +9,7 @@ import logging
 import argparse
 from pydub import AudioSegment
 import DaVinciResolveScript as dvr_script
+import csv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -197,10 +198,10 @@ def wait_for_subtitles(timeline, max_attempts=30):
                 logging.error("Timeline is None")
                 return False
                 
-            # Try to get subtitle items
-            subtitle_items = timeline.GetSubtitleItems()
-            if subtitle_items and len(subtitle_items) > 0:
-                logging.info(f"Found {len(subtitle_items)} subtitle items")
+            # Try to get subtitle items using GetItemListInTrack instead of GetSubtitleItems
+            items = timeline.GetItemListInTrack("subtitle", 1)
+            if items and len(items) > 0:
+                logging.info(f"Found {len(items)} subtitle items")
                 return True
                 
             logging.info(f"Attempt {attempt + 1}/{max_attempts}: No subtitles yet, waiting {wait_time} seconds...")
@@ -283,19 +284,19 @@ def setup_timeline_tracks(timeline):
                 return False
         
         # Check subtitle tracks
-        subtitle_tracks = timeline.GetSubtitleTrackCount()
+        subtitle_tracks = timeline.GetTrackCount("subtitle")
         logging.info(f"Current subtitle track count: {subtitle_tracks}")
         
         # Add subtitle track if none exist
         if subtitle_tracks == 0:
             logging.info("No subtitle tracks found, adding one...")
-            if not timeline.AddSubtitleTrack():
+            if not timeline.AddTrack("subtitle"):
                 logging.error("Failed to add subtitle track")
                 return False
             time.sleep(1)  # Wait for track creation
             
             # Verify subtitle track was created
-            subtitle_tracks = timeline.GetSubtitleTrackCount()
+            subtitle_tracks = timeline.GetTrackCount("subtitle")
             logging.info(f"Subtitle track count after creation: {subtitle_tracks}")
             if subtitle_tracks < 1:
                 logging.error("No subtitle tracks found after creation")
@@ -497,12 +498,155 @@ def create_timeline_with_media(project, media_pool, media_item, timeline_name):
         logging.error(f"Error creating timeline with media: {str(e)}")
         return None
 
+def ensure_edit_page(resolve):
+    """Ensure we're on the Edit page."""
+    try:
+        current_page = resolve.GetCurrentPage()
+        if current_page != "edit":
+            resolve.OpenPage("edit")
+            time.sleep(1)  # Wait for page switch
+        return True
+    except Exception as e:
+        logging.error(f"Error ensuring Edit page: {str(e)}")
+        return False
+
+def get_current_timeline(resolve):
+    """Get the current timeline, ensuring we're on the Edit page first."""
+    try:
+        # Ensure we're on the Edit page
+        if not ensure_edit_page(resolve):
+            return None
+            
+        # Get project and timeline
+        project = resolve.GetProjectManager().GetCurrentProject()
+        if not project:
+            return None
+            
+        timeline = project.GetCurrentTimeline()
+        return timeline
+    except Exception as e:
+        logging.error(f"Error getting current timeline: {str(e)}")
+        return None
+
+def get_subtitle_items(timeline):
+    """Get subtitle items and their text from the timeline"""
+    try:
+        subtitle_items = []
+        
+        # Try to get items in subtitle track
+        try:
+            items = timeline.GetItemListInTrack("subtitle", 1)
+            if items:
+                logging.info("Found %d items in subtitle track", len(items))
+                for i, item in enumerate(items):
+                    try:
+                        # Try to get text using GetName
+                        text = item.GetName()
+                        if text:
+                            logging.info("Found text in item %d: %s", i, text)
+                            subtitle_items.append({
+                                'index': i + 1,
+                                'text': text
+                            })
+                    except Exception as e:
+                        logging.error("Error getting text from item %d: %s", i, str(e))
+            else:
+                logging.info("No items found in subtitle track")
+        except Exception as e:
+            logging.error("Error getting items from subtitle track: %s", str(e))
+            
+        return subtitle_items
+    except Exception as e:
+        logging.error("Error getting subtitle items: %s", str(e))
+        return []
+
+def convert_edl_to_srt(edl_path, srt_path, subtitle_items):
+    """
+    Convert EDL/CSV format to SRT format, using the actual subtitle text from subtitle_items.
+    """
+    try:
+        logging.info(f"Reading EDL from: {edl_path}")
+        with open(edl_path, 'r', encoding='utf-8') as edl_file:
+            # Read CSV with proper handling of quotes
+            reader = csv.DictReader(edl_file)
+            
+            # Calculate subtitle timings based on total duration
+            total_duration = None
+            for row in reader:
+                if row['Record Duration']:
+                    total_duration = row['Record Duration'].strip('"')
+                    break
+            
+            if not total_duration:
+                logging.error("Could not find total duration in EDL")
+                return False
+                
+            # Convert total duration to frames (assuming 24fps)
+            def tc_to_frames(tc):
+                h, m, s, f = map(int, tc.split(':'))
+                return f + s * 24 + m * 24 * 60 + h * 24 * 60 * 60
+                
+            def frames_to_tc(frames):
+                h = frames // (24 * 60 * 60)
+                frames %= (24 * 60 * 60)
+                m = frames // (24 * 60)
+                frames %= (24 * 60)
+                s = frames // 24
+                f = frames % 24
+                return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+                
+            total_frames = tc_to_frames(total_duration)
+            frames_per_subtitle = total_frames // len(subtitle_items)
+            
+            logging.info(f"Writing SRT to: {srt_path}")
+            with open(srt_path, 'w', encoding='utf-8') as srt_file:
+                for i, item in enumerate(subtitle_items):
+                    # Get the text for this subtitle
+                    text = item.get('text', '')
+                    if not text:
+                        continue
+                        
+                    # Calculate start and end frames for this subtitle
+                    start_frames = i * frames_per_subtitle
+                    end_frames = (i + 1) * frames_per_subtitle
+                    
+                    # Convert frames to timecode
+                    start_tc = frames_to_tc(start_frames)
+                    end_tc = frames_to_tc(end_frames)
+                    
+                    # Convert EDL timecode (HH:MM:SS:FF) to SRT timecode (HH:MM:SS,mmm)
+                    def convert_to_srt_tc(tc):
+                        if not tc:
+                            return "00:00:00,000"
+                        try:
+                            h, m, s, f = map(int, tc.split(':'))
+                            # Convert frames to milliseconds (assuming 24fps)
+                            ms = int(f * 1000 / 24)
+                            return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+                        except:
+                            return "00:00:00,000"
+                    
+                    start_srt = convert_to_srt_tc(start_tc)
+                    end_srt = convert_to_srt_tc(end_tc)
+                    
+                    # Write SRT entry
+                    srt_file.write(f"{i+1}\n")
+                    srt_file.write(f"{start_srt} --> {end_srt}\n")
+                    srt_file.write(f"{text}\n\n")
+                        
+        logging.info("Successfully converted EDL to SRT")
+        return True
+    except Exception as e:
+        logging.error(f"Error converting EDL to SRT: {str(e)}")
+        return False
+
 def generate_srt_for_file(audio_file):
     """Generate SRT file for the given audio file."""
     try:
         # Get the base name without extension for the SRT file
         base_name = os.path.splitext(audio_file)[0]
         srt_path = f"{base_name}.srt"
+        txt_path = f"{base_name}.txt"
         
         logging.info(f"Starting SRT generation for: {audio_file}")
         logging.info(f"Output SRT will be saved to: {srt_path}")
@@ -577,88 +721,101 @@ def generate_srt_for_file(audio_file):
                 return False
             logging.info(f"Current project: {project_name}")
             
+            # Ensure we're on the Edit page
+            if not ensure_edit_page(resolve):
+                logging.error("Failed to switch to Edit page")
+                return False
+            logging.info("Successfully switched to Edit page")
+            
             # Get current timeline and verify
-            timeline = project.GetCurrentTimeline()
+            timeline = get_current_timeline(resolve)
             if not timeline:
                 logging.error("Timeline is not valid")
                 return False
             timeline_name = timeline.GetName()
             logging.info(f"Current timeline: {timeline_name}")
             
-            # Get timeline tracks
-            logging.info("Getting timeline tracks...")
+            # Setup timeline tracks
+            logging.info("Setting up timeline tracks...")
+            if not setup_timeline_tracks(timeline):
+                logging.error("Failed to setup timeline tracks")
+                return False
+            logging.info("Successfully set up timeline tracks")
+            
+            # Get timeline again to ensure it's still valid
+            timeline = get_current_timeline(resolve)
+            if not timeline:
+                logging.error("Timeline became invalid after track setup")
+                return False
+            logging.info("Timeline is still valid after track setup")
+            
+            # Try to generate subtitles
+            logging.info("Generating subtitles...")
             try:
-                # Get video tracks first to verify timeline is accessible
-                video_tracks = timeline.GetTrackCount("video")
-                logging.info(f"Found {video_tracks} video track(s)")
-                
-                # Get audio tracks
-                audio_tracks = timeline.GetTrackCount("audio")
-                logging.info(f"Found {audio_tracks} audio track(s)")
-                
-                # Try to add subtitle track
-                logging.info("Adding subtitle track...")
-                result = timeline.AddTrack("subtitle")
+                result = timeline.CreateSubtitlesFromAudio()
                 if not result:
-                    logging.error("Failed to add subtitle track")
+                    logging.error("Failed to generate subtitles")
                     return False
-                logging.info("Successfully added subtitle track")
-                
-                time.sleep(2)  # Wait for track creation
-                
-                # Get timeline again to ensure it's still valid
-                timeline = project.GetCurrentTimeline()
-                if not timeline:
-                    logging.error("Timeline became invalid after adding subtitle track")
-                    return False
-                logging.info("Timeline is still valid after adding subtitle track")
-                
-                # Try to generate subtitles
-                logging.info("Generating subtitles...")
-                try:
-                    result = timeline.CreateSubtitlesFromAudio()
-                    if not result:
-                        logging.error("Failed to generate subtitles")
-                        return False
-                    logging.info("Successfully generated subtitles")
-                except Exception as e:
-                    logging.error(f"Error during subtitle generation: {str(e)}")
-                    return False
-                
-                time.sleep(2)  # Wait for subtitle generation
-                
-                # Get timeline again to ensure it's still valid
-                timeline = project.GetCurrentTimeline()
-                if not timeline:
-                    logging.error("Timeline became invalid after generating subtitles")
-                    return False
-                logging.info("Timeline is still valid after generating subtitles")
-                
-                # Export subtitles
-                logging.info("Attempting to export subtitles...")
-                try:
-                    # Get fresh timeline reference before export
-                    timeline = project.GetCurrentTimeline()
-                    if not timeline:
-                        logging.error("Timeline became invalid before export")
-                        return False
-                        
-                    result = timeline.ExportSubtitles(srt_path, "srt", 1)
-                    if not result:
-                        logging.error("Failed to export subtitles")
-                        return False
-                    logging.info("Successfully exported subtitles")
-                except Exception as e:
-                    logging.error(f"Error during subtitle export: {str(e)}")
-                    return False
-                
-                return True
+                logging.info("Successfully generated subtitles")
             except Exception as e:
-                logging.error(f"Error during subtitle generation process: {str(e)}")
+                logging.error(f"Error during subtitle generation: {str(e)}")
                 return False
             
+            # Wait for subtitle generation
+            if not wait_for_subtitles(timeline):
+                logging.error("Failed waiting for subtitles")
+                return False
+            
+            # Get timeline again to ensure it's still valid
+            timeline = get_current_timeline(resolve)
+            if not timeline:
+                logging.error("Timeline became invalid after generating subtitles")
+                return False
+            logging.info("Timeline is still valid after generating subtitles")
+            
+            # Get subtitle items
+            subtitle_items = get_subtitle_items(timeline)
+            if not subtitle_items:
+                logging.error("No subtitle items found")
+                return False
+            logging.info(f"Found {len(subtitle_items)} subtitle items")
+            
+            # Export subtitles to EDL/CSV first
+            logging.info("Exporting subtitles as EDL/CSV...")
+            try:
+                # Ensure the output directory exists
+                os.makedirs(os.path.dirname(txt_path), exist_ok=True)
+                
+                # Try direct SRT export first
+                logging.info(f"Attempting direct SRT export to: {srt_path}")
+                srt_export_result = timeline.Export(srt_path, resolve.EXPORT_TEXT_CSV)
+                if srt_export_result:
+                    logging.info("Successfully exported SRT directly")
+                    return True
+                
+                # If direct export fails, try CSV export and conversion
+                logging.info("Direct SRT export failed, trying CSV export...")
+                csv_export_result = timeline.Export(txt_path, resolve.EXPORT_TEXT_CSV)
+                if csv_export_result:
+                    logging.info(f"Successfully exported CSV to {txt_path}")
+                    
+                    # Convert CSV to SRT
+                    if convert_edl_to_srt(txt_path, srt_path, subtitle_items):
+                        logging.info(f"Successfully converted CSV to SRT at {srt_path}")
+                        return True
+                    else:
+                        logging.error("Failed to convert CSV to SRT")
+                else:
+                    logging.error("Failed to export CSV")
+            except Exception as e:
+                logging.error(f"Error during export: {str(e)}")
+                return False
+            
+            logging.info("Successfully generated SRT file")
+            return True
+            
         except Exception as e:
-            logging.error("Error during subtitle generation/export: %s", str(e))
+            logging.error(f"Error during subtitle generation/export: {str(e)}")
             return False
             
     except Exception as e:
