@@ -108,3 +108,74 @@ If you encounter issues installing PyAudio on macOS, try the following steps:
    ```
    
    instead of just using `pip install`.
+
+3. If you get a "No module named '_audioop'" or "pyaudioop" error, try this direct installation approach which worked reliably:
+
+   **For Python 3.7-3.9:**
+   ```bash
+   # First uninstall any existing PyAudio
+   PYTHONPATH="" python -m pip uninstall -y pyaudio
+   
+   # Update pip, setuptools, and wheel
+   PYTHONPATH="" python -m pip install --upgrade pip setuptools wheel
+   
+   # Install PyAudio with direct linking to portaudio
+   PYTHONPATH="" pip install --global-option=build_ext --global-option="-I/usr/local/include" --global-option="-L/usr/local/lib" pyaudio
+   ```
+   
+   **For Python 3.13:**
+   ```bash
+   # Make sure to use the correct Python version
+   python3.13 -m pip uninstall -y pyaudio
+   
+   # Update pip, setuptools, and wheel
+   python3.13 -m pip install --upgrade pip setuptools wheel
+   
+   # Install PyAudio with direct linking to portaudio
+   python3.13 -m pip install --global-option=build_ext --global-option="-I/usr/local/include" --global-option="-L/usr/local/lib" pyaudio
+   ```
+   
+   This forces pip to link against the Homebrew-installed portaudio library.
+   
+4. If you're using multiple Python versions on your system, ensure you're using the correct version for running the script:
+   ```bash
+   # For Python 3.13
+   python3.13 generate_srt.py "your_audio_file.mp3"
+   ```
+   
+   Also make sure your environment variables are set properly for the specific Python version you're using.
+
+### PyDub/AudioOp Issues on macOS with Python 3.13
+
+If you're using Python 3.13 on macOS and encounter errors related to `audioop`, `_audioop`, or `pyaudioop` when importing PyDub, this is a known compatibility issue. Run the provided global Python fix script:
+
+```bash
+./global_python_fix.py
+```
+
+This script:
+1. Reinstalls PyDub with the system Python 3.13
+2. Creates compatibility modules (`_audioop.py`, `audioop.py`, and `pyaudioop.py`)
+3. Tests that PyDub can be imported and used
+
+The fix works by creating dummy implementations of the audio processing modules that PyDub expects but are missing or renamed in Python 3.13.
+
+**After running the fix:**
+- Use the global Python 3.13 interpreter to run your scripts:
+  ```bash
+  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13 generate_srt.py "your_audio_file.mp3"
+  ```
+- Make sure to use the full path to the Python 3.13 interpreter rather than relying on environment variables or aliases
+
+**Known errors this fixes:**
+```
+ModuleNotFoundError: No module named 'audioop'
+```
+or
+```
+ModuleNotFoundError: No module named 'pyaudioop'
+```
+
+**Note:** The fix adds dummy implementations of the audio operations modules, which should be sufficient for basic PyDub functionality but may not work for all advanced audio processing operations.
+
+If you still encounter issues after running the fix script, consider downgrading to Python 3.9 which has better compatibility with audio processing libraries.
