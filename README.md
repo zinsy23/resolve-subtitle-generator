@@ -84,3 +84,27 @@ If you encounter issues:
 2. Verify the environment variables are set correctly
 3. Check that you have the required Python packages installed
 4. Make sure you have write permissions in the output directory
+
+### PyAudio Installation Issues on macOS
+
+If you encounter issues installing PyAudio on macOS, try the following steps:
+
+1. Install portaudio using Homebrew:
+   ```bash
+   brew install portaudio
+   ```
+
+2. If you're experiencing Python environment conflicts (especially with multiple Python versions installed), you may need to:
+   
+   a. Clear your PYTHONPATH environment variable temporarily:
+   ```bash
+   PYTHONPATH="" python -m pip install --upgrade pip
+   PYTHONPATH="" python -m pip install -r requirements.txt
+   ```
+   
+   b. If using pyenv or multiple Python installations, ensure you're using the correct pip for your Python version:
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
+   
+   instead of just using `pip install`.
