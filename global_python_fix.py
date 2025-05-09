@@ -1,16 +1,29 @@
 #!/usr/bin/env python
 """
 Script to directly fix PyDub and audioop issue using the system Python
-This avoids issues with pyenv or other Python version managers
+This works on both macOS and Windows systems
 """
 
 import os
 import sys
 import shutil
 import subprocess
+import platform
 
-# Get the system Python interpreter
-SYSTEM_PYTHON = "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13"
+# Determine the system and set appropriate Python path
+def get_system_python():
+    """Get the system Python interpreter path based on the operating system."""
+    if platform.system() == "Darwin":  # macOS
+        return "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13"
+    elif platform.system() == "Windows":  # Windows
+        # Get the current Python executable path
+        return sys.executable
+    else:
+        print(f"Unsupported operating system: {platform.system()}")
+        sys.exit(1)
+
+# Set the system Python interpreter
+SYSTEM_PYTHON = get_system_python()
 
 def create_complete_audioop():
     """Create a complete audioop module for Python 3.13."""
@@ -96,11 +109,11 @@ def ulaw2lin(fragment, width):
     return b'' * (len(fragment) * width)
 """)
     
-    # Make a symlink for older name if needed
+    # Create compatibility modules
     audioop_alt_path = os.path.join(site_packages, "audioop.py")
     pyaudioop_path = os.path.join(site_packages, "pyaudioop.py")
     
-    # Create symlinks for compatibility
+    # Create compatibility modules with proper platform handling
     try:
         if not os.path.exists(audioop_alt_path):
             with open(audioop_alt_path, 'w') as f:
@@ -154,6 +167,7 @@ def reinstall_pydub():
 def show_system_info():
     """Show information about the Python environment."""
     print("=== System Information ===")
+    print(f"Operating System: {platform.system()} {platform.version()}")
     
     # Get Python version
     try:
@@ -185,6 +199,7 @@ def show_system_info():
 def main():
     """Main function."""
     print("=== Global Python PyDub/AudioOp Fix ===\n")
+    print(f"Using Python interpreter: {SYSTEM_PYTHON}")
     
     # Show system information
     show_system_info()
