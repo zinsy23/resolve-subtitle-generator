@@ -17,39 +17,29 @@ import csv
 logging.basicConfig(level=logging.INFO)
 
 def find_module_locations(base_path):
-    """Find DaVinciResolveScript.py based on a base path.
-    ONLY checks the exact path specified - either exactly at base_path/DaVinciResolveScript.py
-    or exactly at base_path/Modules/DaVinciResolveScript.py."""
+    """Find DaVinciResolveScript.py at the exact path specified.
+    ONLY checks for the module file at exactly the path provided, with no alternate locations.
+    This ensures we never check multiple locations or parent/child directories."""
     locations = []
     module_paths = []
     
-    # Debug output
-    print(f"\nChecking for module in ONLY these specific locations:")
-    print(f"  1. {os.path.join(base_path, 'Modules', 'DaVinciResolveScript.py')}")
-    print(f"  2. {os.path.join(base_path, 'DaVinciResolveScript.py')}")
+    # Check ONLY for the module file at the exact path specified
+    module_path = os.path.join(base_path, "DaVinciResolveScript.py")
+    print(f"\nChecking for module at ONLY this exact location:")
+    print(f"  {module_path}")
     print(f"  No other locations will be checked.")
     
-    # Check standard location (base_path/Modules/DaVinciResolveScript.py)
-    standard_location = os.path.join(base_path, "Modules", "DaVinciResolveScript.py")
-    if os.path.isfile(standard_location):
-        locations.append(os.path.dirname(standard_location))
-        module_paths.append(standard_location)
-        print(f"Found module at standard location: {standard_location}")
-    
-    # Check directly in base path (base_path/DaVinciResolveScript.py)
-    direct_location = os.path.join(base_path, "DaVinciResolveScript.py")
-    if os.path.isfile(direct_location):
+    if os.path.isfile(module_path):
         locations.append(base_path)
-        module_paths.append(direct_location)
-        print(f"Found module directly in specified path: {direct_location}")
-    
-    # Debug output
-    if not module_paths:
-        print("Module NOT found in either location")
+        module_paths.append(module_path)
+        print(f"Found module at: {module_path}")
+        print(f"Adding exact directory to path: {base_path}")
+    else:
+        print(f"Module NOT found at: {module_path}")
     
     return {
-        "locations": locations,  # Directories containing the module
-        "module_paths": module_paths  # Full paths to the module files
+        "locations": locations,  # Directory containing the module (exactly one or none)
+        "module_paths": module_paths  # Full path to the module file (exactly one or none)
     }
 
 def validate_resolve_paths():
@@ -171,53 +161,62 @@ def validate_resolve_paths():
             else:
                 # Use custom path
                 custom_path = use_default
-                # Check if they provided the file itself or just a directory
+                path_set = False
+                
+                # Check if the path is a file
                 if os.path.isfile(custom_path):
-                    # User provided the actual file path
-                    module_dir = os.path.dirname(custom_path)
+                    # User provided the actual file path - use ONLY the exact directory containing the file
                     if os.path.basename(custom_path) == "DaVinciResolveScript.py":
-                        # Set the directory containing the file as API path
+                        # Set the exact directory containing the file as API path
+                        module_dir = os.path.dirname(custom_path)
                         os.environ["RESOLVE_SCRIPT_API"] = module_dir
                         api_path = module_dir
                         config["RESOLVE_SCRIPT_API"] = module_dir
                         modified = True
-                        print(f"Set API path to directory containing file: {module_dir}")
+                        print(f"Set API path to exact directory containing file: {module_dir}")
+                        path_set = True
                     else:
                         print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
                         retry = input("Use this path anyway? (y/n): ")
                         if retry.lower() == 'y':
+                            module_dir = os.path.dirname(custom_path)
                             os.environ["RESOLVE_SCRIPT_API"] = module_dir
                             api_path = module_dir
                             config["RESOLVE_SCRIPT_API"] = module_dir
                             modified = True
-                        else:
-                            print(f"Using default path: {default_api_path}")
-                            os.environ["RESOLVE_SCRIPT_API"] = default_api_path
-                            api_path = default_api_path
-                            if "RESOLVE_SCRIPT_API" in config:
-                                del config["RESOLVE_SCRIPT_API"]
-                                modified = True
-                elif os.path.isdir(custom_path):
-                    # User provided a directory
-                    # Check if it has the module directly or in a Modules subdirectory
-                    custom_module_info = find_module_locations(custom_path)
-                    if custom_module_info["module_paths"]:
-                        # Found the module in or under the specified directory
+                            path_set = True
+                
+                # Check if the path is a directory (only if path not already set)
+                if not path_set and os.path.isdir(custom_path):
+                    # User provided a directory - use ONLY this exact directory
+                    # Check if it has the module file directly in this directory
+                    module_path = os.path.join(custom_path, "DaVinciResolveScript.py")
+                    if os.path.isfile(module_path):
+                        # Found the module in the exact directory specified
                         os.environ["RESOLVE_SCRIPT_API"] = custom_path
                         api_path = custom_path
                         config["RESOLVE_SCRIPT_API"] = custom_path
                         modified = True
-                        print(f"Found module at: {custom_module_info['module_paths'][0]}")
-                        print(f"Set API path to: {custom_path}")
+                        print(f"Found module at: {module_path}")
+                        print(f"Set API path to exact directory: {custom_path}")
+                        path_set = True
                     else:
-                        print(f"Warning: DaVinciResolveScript.py not found at or under: {custom_path}")
-                        print(f"Using path anyway: {custom_path}")
-                        os.environ["RESOLVE_SCRIPT_API"] = custom_path
-                        api_path = custom_path
-                        config["RESOLVE_SCRIPT_API"] = custom_path
-                        modified = True
-                else:
-                    print(f"Warning: Path not found: {custom_path}")
+                        print(f"Warning: DaVinciResolveScript.py not found at: {module_path}")
+                        retry = input("Use this path anyway? (y/n): ")
+                        if retry.lower() == 'y':
+                            os.environ["RESOLVE_SCRIPT_API"] = custom_path
+                            api_path = custom_path
+                            config["RESOLVE_SCRIPT_API"] = custom_path
+                            modified = True
+                            path_set = True
+                
+                # If path not set by any of the above, use default
+                if not path_set:
+                    if os.path.isfile(custom_path) or os.path.isdir(custom_path):
+                        print(f"Warning: DaVinciResolveScript.py not found at specified path")
+                    else:
+                        print(f"Warning: Path not found: {custom_path}")
+                    
                     print(f"Using default path: {default_api_path}")
                     os.environ["RESOLVE_SCRIPT_API"] = default_api_path
                     api_path = default_api_path
@@ -236,39 +235,41 @@ def validate_resolve_paths():
                     continue
                 
                 if os.path.isfile(custom_path):
-                    # User provided the actual file path
-                    module_dir = os.path.dirname(custom_path)
+                    # User provided the actual file path - use ONLY the exact directory containing the file
                     if os.path.basename(custom_path) == "DaVinciResolveScript.py":
-                        # Set the directory as API path
+                        # Set the exact directory containing the file as API path
+                        module_dir = os.path.dirname(custom_path)
                         os.environ["RESOLVE_SCRIPT_API"] = module_dir
                         api_path = module_dir
                         config["RESOLVE_SCRIPT_API"] = module_dir
                         modified = True
-                        print(f"Set API path to directory containing file: {module_dir}")
+                        print(f"Set API path to exact directory containing file: {module_dir}")
                         break
                     else:
                         print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
                         retry = input("Use this path anyway? (y/n): ")
                         if retry.lower() == 'y':
+                            module_dir = os.path.dirname(custom_path)
                             os.environ["RESOLVE_SCRIPT_API"] = module_dir
                             api_path = module_dir
                             config["RESOLVE_SCRIPT_API"] = module_dir
                             modified = True
                             break
                 elif os.path.isdir(custom_path):
-                    # User provided a directory
-                    custom_module_info = find_module_locations(custom_path)
-                    if custom_module_info["module_paths"]:
-                        # Found the module in or under the specified directory
+                    # User provided a directory - use ONLY this exact directory
+                    # Check if it has the module file directly in this directory
+                    module_path = os.path.join(custom_path, "DaVinciResolveScript.py")
+                    if os.path.isfile(module_path):
+                        # Found the module in the exact directory specified
                         os.environ["RESOLVE_SCRIPT_API"] = custom_path
                         api_path = custom_path
                         config["RESOLVE_SCRIPT_API"] = custom_path
                         modified = True
-                        print(f"Found module at: {custom_module_info['module_paths'][0]}")
-                        print(f"Set API path to: {custom_path}")
+                        print(f"Found module at: {module_path}")
+                        print(f"Set API path to exact directory: {custom_path}")
                         break
                     else:
-                        print(f"Warning: DaVinciResolveScript.py not found at or under: {custom_path}")
+                        print(f"Warning: DaVinciResolveScript.py not found at: {module_path}")
                         retry = input("Use this path anyway? (y/n): ")
                         if retry.lower() == 'y':
                             os.environ["RESOLVE_SCRIPT_API"] = custom_path
@@ -278,6 +279,7 @@ def validate_resolve_paths():
                             break
                 else:
                     print(f"Error: Path not found: {custom_path}")
+                    continue
     
     # Check if library file exists
     lib_file_exists = os.path.isfile(lib_path)
@@ -357,13 +359,16 @@ def validate_resolve_paths():
     logging.info(f"Using RESOLVE_SCRIPT_API: {api_path}")
     logging.info(f"Using RESOLVE_SCRIPT_LIB: {lib_path}")
     
-    # Add ONLY the module locations returned by find_module_locations to sys.path
+    # Add ONLY the exact directory containing the module to sys.path
     module_info = find_module_locations(api_path)
-    logging.info("Adding ONLY these directories to Python path:")
+    logging.info("Adding ONLY the exact directory to Python path:")
     for path in module_info["locations"]:
         if path not in sys.path:
             sys.path.append(path)
             logging.info(f"Added to Python path: {path}")
+    
+    if not module_info["locations"]:
+        logging.warning("No module locations found to add to Python path")
     
     logging.info("=============================================")
     
@@ -389,7 +394,7 @@ def test_resolve_import_in_subprocess():
     api_path = os.environ.get("RESOLVE_SCRIPT_API", "")
     lib_path = os.environ.get("RESOLVE_SCRIPT_LIB", "")
     
-    # Find all possible module locations - ONLY using the strict find_module_locations function
+    # Find the module location - ONLY using the strict find_module_locations function
     module_info = find_module_locations(api_path)
     module_locations = module_info["locations"]
     module_files = module_info["module_paths"]
@@ -399,13 +404,18 @@ def test_resolve_import_in_subprocess():
     for path in module_files:
         print(f"  - {path}")
     
-    # ONLY use the paths returned by find_module_locations
+    # ONLY use the exact path returned by find_module_locations
     search_paths = []
     for loc in module_locations:
         if loc not in search_paths and os.path.exists(loc):
             search_paths.append(loc)
     
     print(f"Search paths to be used: {search_paths}")
+    
+    # If no valid paths found, return failure
+    if not search_paths:
+        logging.error("No valid module paths found for testing")
+        return False
     
     # Create a temporary Python file with the import test
     with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
@@ -421,7 +431,7 @@ import glob
 os.environ["RESOLVE_SCRIPT_API"] = r"{api_path}"
 os.environ["RESOLVE_SCRIPT_LIB"] = r"{lib_path}"
 
-# Add ONLY the specific module paths to sys.path
+# Add ONLY the specific module path to sys.path
 search_paths = {search_paths!r}
 for path in search_paths:
     if path and path not in sys.path:
@@ -436,34 +446,14 @@ for module_file in module_files:
 # Print sys.path for debugging
 print(f"Python sys.path: {{sys.path}}")
 
-# Try direct import first
+# Try direct import only - no fallbacks
 try:
     import DaVinciResolveScript
     print("Successfully imported DaVinciResolveScript in test process")
     sys.exit(0)
 except ImportError as e:
-    print(f"Standard import failed: {{e}}")
-
-# Try alternate import approaches
-for module_file in module_files:
-    module_dir = os.path.dirname(module_file)
-    module_name = os.path.splitext(os.path.basename(module_file))[0]
-    
-    try:
-        # Try adding module dir directly to path and importing
-        if module_dir not in sys.path:
-            sys.path.append(module_dir)
-            print(f"Added module directory {{module_dir}} directly to path")
-        
-        # Try to import again
-        import DaVinciResolveScript
-        print(f"Successfully imported DaVinciResolveScript after adding {{module_dir}}")
-        sys.exit(0)
-    except ImportError as e:
-        print(f"Import still failed with {{module_dir}} in path: {{e}}")
-
-print("All import attempts failed")
-sys.exit(1)
+    print(f"Import failed: {{e}}")
+    sys.exit(1)
 ''')
         
     try:
