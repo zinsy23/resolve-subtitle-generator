@@ -22,12 +22,19 @@ def validate_resolve_paths():
     config = {}
     modified = False
     
+    print("\n=== Starting path validation ===")
+    print("Checking for required files...")
+    
     # Load saved paths if available
     if os.path.exists(config_file):
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
-                logging.info("Loaded custom paths from config file")
+                print(f"Loaded config from: {config_file}")
+                if "RESOLVE_SCRIPT_API" in config:
+                    print(f"  Config API path: {config['RESOLVE_SCRIPT_API']}")
+                if "RESOLVE_SCRIPT_LIB" in config:
+                    print(f"  Config LIB path: {config['RESOLVE_SCRIPT_LIB']}")
         except Exception as e:
             logging.warning(f"Failed to load config file: {str(e)}")
     
@@ -51,6 +58,9 @@ def validate_resolve_paths():
     else:
         default_lib_path = ""
     
+    print(f"Default API path: {default_api_path}")
+    print(f"Default LIB path: {default_lib_path}")
+    
     # Helper function to find module file in different possible locations
     def find_module_file(base_path):
         """Find DaVinciResolveScript.py in various possible locations relative to base_path"""
@@ -61,10 +71,10 @@ def validate_resolve_paths():
             os.path.join(os.path.dirname(base_path), "DaVinciResolveScript.py")  # One directory up
         ]
         
-        logging.info(f"Searching for module file near: {base_path}")
+        print(f"Searching for module file near: {base_path}")
         for location in possible_locations:
             if location and os.path.exists(location) and os.path.isfile(location):
-                logging.info(f"Found module at: {location}")
+                print(f"  Found module at: {location}")
                 # If we found the file, normalize the API path to the directory containing Modules
                 if location == possible_locations[0]:  # Standard location
                     return location, base_path
@@ -75,13 +85,16 @@ def validate_resolve_paths():
                 elif location == possible_locations[3]:  # One directory up
                     return location, os.path.dirname(os.path.dirname(location))
         
-        logging.info(f"No module found near: {base_path}")
+        print(f"  No module found near: {base_path}")
         return None, base_path
     
     # Check if default module file exists
     default_module_file = os.path.join(default_api_path, "Modules", "DaVinciResolveScript.py")
     default_api_valid = os.path.isfile(default_module_file)
     default_lib_valid = os.path.isfile(default_lib_path)
+    
+    print(f"Default module file exists: {default_api_valid}")
+    print(f"Default library file exists: {default_lib_valid}")
     
     # --------------------------------
     # CRITICAL: First set initial environment variables
@@ -92,39 +105,47 @@ def validate_resolve_paths():
     if "RESOLVE_SCRIPT_API" in config:
         api_path = config["RESOLVE_SCRIPT_API"]
         os.environ["RESOLVE_SCRIPT_API"] = api_path
-        logging.info(f"Set API path from config: {api_path}")
+        print(f"Using API path from config: {api_path}")
     elif os.getenv("RESOLVE_SCRIPT_API"):
         api_path = os.getenv("RESOLVE_SCRIPT_API")
-        logging.info(f"Using existing API path from env: {api_path}")
+        print(f"Using existing API path from env: {api_path}")
     else:
         api_path = default_api_path
         os.environ["RESOLVE_SCRIPT_API"] = api_path
-        logging.info(f"Set default API path: {api_path}")
+        print(f"Using default API path: {api_path}")
         
     # Set initial LIB path from config or env
     lib_path = None
     if "RESOLVE_SCRIPT_LIB" in config:
         lib_path = config["RESOLVE_SCRIPT_LIB"]
         os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
-        logging.info(f"Set LIB path from config: {lib_path}")
+        print(f"Using LIB path from config: {lib_path}")
     elif os.getenv("RESOLVE_SCRIPT_LIB"):
         lib_path = os.getenv("RESOLVE_SCRIPT_LIB")
-        logging.info(f"Using existing LIB path from env: {lib_path}")
+        print(f"Using existing LIB path from env: {lib_path}")
     else:
         lib_path = default_lib_path
         os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
-        logging.info(f"Set default LIB path: {lib_path}")
+        print(f"Using default LIB path: {lib_path}")
     
     # --------------------------------
     # CRITICAL: Direct check if required files exist
     # --------------------------------
     
+    # ALWAYS ask for path - debugging mode
+    force_module_prompt = True
+    
     # Check if module file exists
     expected_module_path = os.path.join(api_path, "Modules", "DaVinciResolveScript.py")
-    if not os.path.isfile(expected_module_path):
+    print(f"Checking module at: {expected_module_path}")
+    module_exists = os.path.isfile(expected_module_path)
+    print(f"Module exists at expected path: {module_exists}")
+    
+    # If module doesn't exist at the expected path OR we're forcing the prompt
+    if not module_exists or force_module_prompt:
         print("\n==================================================")
-        print(f"ERROR: DaVinciResolveScript.py not found at expected path!")
-        print(f"Expected at: {expected_module_path}")
+        print(f"ACTION NEEDED: DaVinciResolveScript.py location")
+        print(f"Current expected path: {expected_module_path}")
         print("==================================================")
         
         # Try to find the file in alternate locations
@@ -196,6 +217,8 @@ def validate_resolve_paths():
     
     # Check if library file exists
     lib_file_exists = os.path.isfile(lib_path)
+    print(f"Library exists at {lib_path}: {lib_file_exists}")
+    
     if not lib_file_exists:
         print("\n==================================================")
         print(f"ERROR: DaVinci Resolve library not found!")
@@ -256,11 +279,11 @@ def validate_resolve_paths():
             if not config:
                 if os.path.exists(config_file):
                     os.remove(config_file)
-                    logging.info(f"Removed empty config file: {config_file}")
+                    print(f"Removed empty config file: {config_file}")
             else:
                 with open(config_file, 'w') as f:
                     json.dump(config, f, indent=2)
-                logging.info(f"Saved custom paths to {config_file}")
+                print(f"Saved custom paths to {config_file}")
         except Exception as e:
             logging.warning(f"Failed to save config file: {str(e)}")
 
