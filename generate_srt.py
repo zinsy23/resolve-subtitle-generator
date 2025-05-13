@@ -23,7 +23,11 @@ def find_module_locations(base_path):
     locations = []
     module_paths = []
     
-    # Only check these two specific locations and nowhere else
+    # Debug output
+    print(f"\nChecking for module in ONLY these specific locations:")
+    print(f"  1. {os.path.join(base_path, 'Modules', 'DaVinciResolveScript.py')}")
+    print(f"  2. {os.path.join(base_path, 'DaVinciResolveScript.py')}")
+    print(f"  No other locations will be checked.")
     
     # Check standard location (base_path/Modules/DaVinciResolveScript.py)
     standard_location = os.path.join(base_path, "Modules", "DaVinciResolveScript.py")
@@ -38,6 +42,10 @@ def find_module_locations(base_path):
         locations.append(base_path)
         module_paths.append(direct_location)
         print(f"Found module directly in specified path: {direct_location}")
+    
+    # Debug output
+    if not module_paths:
+        print("Module NOT found in either location")
     
     return {
         "locations": locations,  # Directories containing the module
@@ -349,17 +357,13 @@ def validate_resolve_paths():
     logging.info(f"Using RESOLVE_SCRIPT_API: {api_path}")
     logging.info(f"Using RESOLVE_SCRIPT_LIB: {lib_path}")
     
-    # Add all module locations to sys.path
+    # Add ONLY the module locations returned by find_module_locations to sys.path
     module_info = find_module_locations(api_path)
+    logging.info("Adding ONLY these directories to Python path:")
     for path in module_info["locations"]:
         if path not in sys.path:
             sys.path.append(path)
             logging.info(f"Added to Python path: {path}")
-            
-    # Also add the API path itself if not already added
-    if api_path and api_path not in sys.path and os.path.exists(api_path):
-        sys.path.append(api_path)
-        logging.info(f"Added API path to Python path: {api_path}")
     
     logging.info("=============================================")
     
@@ -385,22 +389,18 @@ def test_resolve_import_in_subprocess():
     api_path = os.environ.get("RESOLVE_SCRIPT_API", "")
     lib_path = os.environ.get("RESOLVE_SCRIPT_LIB", "")
     
-    # Find all possible module locations
+    # Find all possible module locations - ONLY using the strict find_module_locations function
     module_info = find_module_locations(api_path)
     module_locations = module_info["locations"]
     module_files = module_info["module_paths"]
     
     # Print found paths for debugging
-    print("Found module locations:")
+    print("Found module locations for testing:")
     for path in module_files:
         print(f"  - {path}")
     
-    # Add the API path itself to search paths
+    # ONLY use the paths returned by find_module_locations
     search_paths = []
-    if os.path.exists(api_path):
-        search_paths.append(api_path)
-    
-    # Add module locations to search paths
     for loc in module_locations:
         if loc not in search_paths and os.path.exists(loc):
             search_paths.append(loc)
@@ -421,7 +421,7 @@ import glob
 os.environ["RESOLVE_SCRIPT_API"] = r"{api_path}"
 os.environ["RESOLVE_SCRIPT_LIB"] = r"{lib_path}"
 
-# Add all possible module paths to sys.path
+# Add ONLY the specific module paths to sys.path
 search_paths = {search_paths!r}
 for path in search_paths:
     if path and path not in sys.path:
