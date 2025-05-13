@@ -7,6 +7,7 @@ import ctypes
 from ctypes import wintypes
 import logging
 import argparse
+import json
 from pydub import AudioSegment
 import DaVinciResolveScript as dvr_script
 import csv
@@ -14,26 +15,88 @@ import csv
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Set Resolve environment variables if not set
-if not os.getenv("RESOLVE_SCRIPT_API"):
-    # Set default paths based on OS
-    if sys.platform.startswith("win"):  # Windows
-        os.environ["RESOLVE_SCRIPT_API"] = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
-    elif sys.platform == "darwin":  # macOS
-        os.environ["RESOLVE_SCRIPT_API"] = r"/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-    elif sys.platform.startswith("linux"):  # Linux
-        os.environ["RESOLVE_SCRIPT_API"] = r"/opt/resolve/Developer/Scripting"
-    logging.info(f"Set RESOLVE_SCRIPT_API to {os.environ['RESOLVE_SCRIPT_API']}")
+def validate_resolve_paths():
+    """Validate Resolve paths and prompt for custom paths if needed."""
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve_paths.json")
+    config = {}
+    
+    # Load saved paths if available
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                logging.info("Loaded custom paths from config file")
+        except Exception as e:
+            logging.warning(f"Failed to load config file: {str(e)}")
+    
+    # Set API path
+    if "RESOLVE_SCRIPT_API" in config:
+        os.environ["RESOLVE_SCRIPT_API"] = config["RESOLVE_SCRIPT_API"]
+    elif not os.getenv("RESOLVE_SCRIPT_API"):
+        # Set default based on OS
+        if sys.platform.startswith("win"):  # Windows
+            default_api_path = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+        elif sys.platform == "darwin":  # macOS
+            default_api_path = r"/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+        elif sys.platform.startswith("linux"):  # Linux
+            default_api_path = r"/opt/resolve/Developer/Scripting"
+        else:
+            default_api_path = ""
+        
+        os.environ["RESOLVE_SCRIPT_API"] = default_api_path
+    
+    # Check if API path exists
+    api_path = os.environ.get("RESOLVE_SCRIPT_API", "")
+    if not os.path.isdir(api_path):
+        print(f"\nDefault DaVinci Resolve API path not found: {api_path}")
+        custom_path = input(f"Please enter the correct path to DaVinci Resolve Scripting folder: ")
+        if os.path.isdir(custom_path):
+            os.environ["RESOLVE_SCRIPT_API"] = custom_path
+            config["RESOLVE_SCRIPT_API"] = custom_path
+        else:
+            print(f"Warning: Path '{custom_path}' does not exist, using default")
+    
+    # Set LIB path
+    if "RESOLVE_SCRIPT_LIB" in config:
+        os.environ["RESOLVE_SCRIPT_LIB"] = config["RESOLVE_SCRIPT_LIB"]
+    elif not os.getenv("RESOLVE_SCRIPT_LIB"):
+        # Set default based on OS
+        if sys.platform.startswith("win"):  # Windows
+            default_lib_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+        elif sys.platform == "darwin":  # macOS
+            default_lib_path = r"/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+        elif sys.platform.startswith("linux"):  # Linux
+            default_lib_path = r"/opt/resolve/libs/Fusion/fusionscript.so"
+        else:
+            default_lib_path = ""
+        
+        os.environ["RESOLVE_SCRIPT_LIB"] = default_lib_path
+    
+    # Check if LIB path exists
+    lib_path = os.environ.get("RESOLVE_SCRIPT_LIB", "")
+    if not os.path.isfile(lib_path):
+        print(f"\nDefault DaVinci Resolve Library not found: {lib_path}")
+        custom_path = input(f"Please enter the correct path to DaVinci Resolve fusionscript library: ")
+        if os.path.isfile(custom_path):
+            os.environ["RESOLVE_SCRIPT_LIB"] = custom_path
+            config["RESOLVE_SCRIPT_LIB"] = custom_path
+        else:
+            print(f"Warning: Path '{custom_path}' does not exist, using default")
+    
+    # Save config if we have custom paths
+    if config:
+        try:
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            logging.info(f"Saved custom paths to {config_file}")
+        except Exception as e:
+            logging.warning(f"Failed to save config file: {str(e)}")
 
-if not os.getenv("RESOLVE_SCRIPT_LIB"):
-    # Set default paths based on OS
-    if sys.platform.startswith("win"):  # Windows
-        os.environ["RESOLVE_SCRIPT_LIB"] = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
-    elif sys.platform == "darwin":  # macOS
-        os.environ["RESOLVE_SCRIPT_LIB"] = r"/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-    elif sys.platform.startswith("linux"):  # Linux
-        os.environ["RESOLVE_SCRIPT_LIB"] = r"/opt/resolve/libs/Fusion/fusionscript.so"
-    logging.info(f"Set RESOLVE_SCRIPT_LIB to {os.environ['RESOLVE_SCRIPT_LIB']}")
+    logging.info(f"Using RESOLVE_SCRIPT_API: {os.environ.get('RESOLVE_SCRIPT_API')}")
+    logging.info(f"Using RESOLVE_SCRIPT_LIB: {os.environ.get('RESOLVE_SCRIPT_LIB')}")
+
+# Validate and set up Resolve paths
+validate_resolve_paths()
 
 # Add Resolve scripting module path
 resolve_script_path = os.path.join(os.environ.get('RESOLVE_SCRIPT_API', ''), 'Modules')
