@@ -17,17 +17,26 @@ import csv
 logging.basicConfig(level=logging.INFO)
 
 def find_module_locations(base_path):
-    """Find possible locations of DaVinciResolveScript.py based on a base path.
-    Only checks the standard location and directly in the specified path."""
+    """Find DaVinciResolveScript.py based on a base path.
+    Only checks the exact path specified - either the file itself or the standard Modules subdirectory."""
     locations = []
     module_paths = []
+    
+    # If base_path is a file path that ends with DaVinciResolveScript.py
+    if os.path.isfile(base_path) and os.path.basename(base_path) == "DaVinciResolveScript.py":
+        locations.append(os.path.dirname(base_path))
+        module_paths.append(base_path)
+        return {
+            "locations": locations,
+            "module_paths": module_paths
+        }
     
     # Check standard location (base_path/Modules/DaVinciResolveScript.py)
     standard_location = os.path.join(base_path, "Modules", "DaVinciResolveScript.py")
     if os.path.isfile(standard_location):
         locations.append(os.path.dirname(standard_location))
         module_paths.append(standard_location)
-        
+    
     # Check directly in base path (base_path/DaVinciResolveScript.py)
     direct_location = os.path.join(base_path, "DaVinciResolveScript.py")
     if os.path.isfile(direct_location):
@@ -163,20 +172,27 @@ def validate_resolve_paths():
                     # User provided the actual file path
                     module_dir = os.path.dirname(custom_path)
                     if os.path.basename(custom_path) == "DaVinciResolveScript.py":
-                        # Set the parent directory as API path
-                        api_parent = os.path.dirname(module_dir) if os.path.basename(module_dir) == "Modules" else module_dir
-                        os.environ["RESOLVE_SCRIPT_API"] = api_parent
-                        api_path = api_parent
-                        config["RESOLVE_SCRIPT_API"] = api_parent
-                        modified = True
-                        print(f"Set API path to: {api_parent} (based on file: {custom_path})")
-                    else:
-                        print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
-                        print(f"Using path anyway: {custom_path}")
+                        # Set the directory as API path
                         os.environ["RESOLVE_SCRIPT_API"] = module_dir
                         api_path = module_dir
                         config["RESOLVE_SCRIPT_API"] = module_dir
                         modified = True
+                        print(f"Set API path to: {module_dir} (based on file: {custom_path})")
+                    else:
+                        print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
+                        retry = input("Use this path anyway? (y/n): ")
+                        if retry.lower() == 'y':
+                            os.environ["RESOLVE_SCRIPT_API"] = module_dir
+                            api_path = module_dir
+                            config["RESOLVE_SCRIPT_API"] = module_dir
+                            modified = True
+                        else:
+                            print(f"Using default path: {default_api_path}")
+                            os.environ["RESOLVE_SCRIPT_API"] = default_api_path
+                            api_path = default_api_path
+                            if "RESOLVE_SCRIPT_API" in config:
+                                del config["RESOLVE_SCRIPT_API"]
+                                modified = True
                 elif os.path.isdir(custom_path):
                     # User provided a directory
                     # Check if it has the module directly or in a Modules subdirectory
@@ -219,13 +235,12 @@ def validate_resolve_paths():
                     # User provided the actual file path
                     module_dir = os.path.dirname(custom_path)
                     if os.path.basename(custom_path) == "DaVinciResolveScript.py":
-                        # Set the parent directory as API path
-                        api_parent = os.path.dirname(module_dir) if os.path.basename(module_dir) == "Modules" else module_dir
-                        os.environ["RESOLVE_SCRIPT_API"] = api_parent
-                        api_path = api_parent
-                        config["RESOLVE_SCRIPT_API"] = api_parent
+                        # Set the directory as API path
+                        os.environ["RESOLVE_SCRIPT_API"] = module_dir
+                        api_path = module_dir
+                        config["RESOLVE_SCRIPT_API"] = module_dir
                         modified = True
-                        print(f"Set API path to: {api_parent} (based on file: {custom_path})")
+                        print(f"Set API path to: {module_dir} (based on file: {custom_path})")
                         break
                     else:
                         print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
