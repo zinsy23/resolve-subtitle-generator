@@ -7,24 +7,513 @@ import ctypes
 from ctypes import wintypes
 import logging
 import argparse
+import json
+import tempfile
+import subprocess
 from pydub import AudioSegment
-import DaVinciResolveScript as dvr_script
 import csv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Set Resolve environment variables if not set
-if not os.getenv("RESOLVE_SCRIPT_API"):
-    os.environ["RESOLVE_SCRIPT_API"] = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
-if not os.getenv("RESOLVE_SCRIPT_LIB"):
-    os.environ["RESOLVE_SCRIPT_LIB"] = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+def find_module_locations(base_path):
+    """Find possible locations of DaVinciResolveScript.py based on a base path.
+    Only checks the standard location and directly in the specified path."""
+    locations = []
+    module_paths = []
+    
+    # Check standard location (base_path/Modules/DaVinciResolveScript.py)
+    standard_location = os.path.join(base_path, "Modules", "DaVinciResolveScript.py")
+    if os.path.isfile(standard_location):
+        locations.append(os.path.dirname(standard_location))
+        module_paths.append(standard_location)
+        
+    # Check directly in base path (base_path/DaVinciResolveScript.py)
+    direct_location = os.path.join(base_path, "DaVinciResolveScript.py")
+    if os.path.isfile(direct_location):
+        locations.append(base_path)
+        module_paths.append(direct_location)
+    
+    return {
+        "locations": locations,  # Directories containing the module
+        "module_paths": module_paths  # Full paths to the module files
+    }
 
-# Add Resolve scripting module path
-resolve_script_path = os.path.join(os.environ.get('RESOLVE_SCRIPT_API', ''), 'Modules')
-if resolve_script_path not in sys.path and os.path.exists(resolve_script_path):
-    sys.path.append(resolve_script_path)
-    logging.info(f"Added {resolve_script_path} to Python path")
+def validate_resolve_paths():
+    """Validate Resolve paths and prompt for custom paths if needed."""
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve_paths.json")
+    config = {}
+    modified = False
+    
+    print("\n=== Starting path validation ===")
+    print("Checking for required files...")
+    
+    # Load saved paths if available
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                print(f"Loaded config from: {config_file}")
+                if "RESOLVE_SCRIPT_API" in config:
+                    print(f"  Config API path: {config['RESOLVE_SCRIPT_API']}")
+                if "RESOLVE_SCRIPT_LIB" in config:
+                    print(f"  Config LIB path: {config['RESOLVE_SCRIPT_LIB']}")
+        except Exception as e:
+            logging.warning(f"Failed to load config file: {str(e)}")
+    
+    # Get default API path based on OS
+    if sys.platform.startswith("win"):  # Windows
+        default_api_path = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+    elif sys.platform == "darwin":  # macOS
+        default_api_path = r"/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+    elif sys.platform.startswith("linux"):  # Linux
+        default_api_path = r"/opt/resolve/Developer/Scripting"
+    else:
+        default_api_path = ""
+    
+    # Get default LIB path based on OS
+    if sys.platform.startswith("win"):  # Windows
+        default_lib_path = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+    elif sys.platform == "darwin":  # macOS
+        default_lib_path = r"/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+    elif sys.platform.startswith("linux"):  # Linux
+        default_lib_path = r"/opt/resolve/libs/Fusion/fusionscript.so"
+    else:
+        default_lib_path = ""
+    
+    print(f"Default API path: {default_api_path}")
+    print(f"Default LIB path: {default_lib_path}")
+    
+    # Check if default paths are valid
+    default_module_paths = find_module_locations(default_api_path)
+    default_api_valid = len(default_module_paths["module_paths"]) > 0
+    default_lib_valid = os.path.isfile(default_lib_path)
+    
+    print(f"Default module file exists: {default_api_valid}")
+    print(f"Default library file exists: {default_lib_valid}")
+    
+    # Set initial API path from config or env
+    api_path = None
+    if "RESOLVE_SCRIPT_API" in config:
+        api_path = config["RESOLVE_SCRIPT_API"]
+        os.environ["RESOLVE_SCRIPT_API"] = api_path
+        print(f"Using API path from config: {api_path}")
+    elif os.getenv("RESOLVE_SCRIPT_API"):
+        api_path = os.getenv("RESOLVE_SCRIPT_API")
+        print(f"Using existing API path from env: {api_path}")
+    else:
+        api_path = default_api_path
+        os.environ["RESOLVE_SCRIPT_API"] = api_path
+        print(f"Using default API path: {api_path}")
+        
+    # Set initial LIB path from config or env
+    lib_path = None
+    if "RESOLVE_SCRIPT_LIB" in config:
+        lib_path = config["RESOLVE_SCRIPT_LIB"]
+        os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
+        print(f"Using LIB path from config: {lib_path}")
+    elif os.getenv("RESOLVE_SCRIPT_LIB"):
+        lib_path = os.getenv("RESOLVE_SCRIPT_LIB")
+        print(f"Using existing LIB path from env: {lib_path}")
+    else:
+        lib_path = default_lib_path
+        os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
+        print(f"Using default LIB path: {lib_path}")
+    
+    # Force prompt option for debugging - set to False in production
+    force_module_prompt = False
+    
+    # Check if module file exists at any possible location
+    module_info = find_module_locations(api_path)
+    module_exists = len(module_info["module_paths"]) > 0
+    
+    # Print all found locations
+    print("Checking possible module locations:")
+    for path in module_info["module_paths"]:
+        print(f"  - {path}: Found")
+    
+    # If module doesn't exist at any checked location or we're forcing the prompt
+    if not module_exists or force_module_prompt:
+        print("\n==================================================")
+        print(f"DaVinciResolveScript.py not found at standard location:")
+        print(f"{os.path.join(api_path, 'Modules', 'DaVinciResolveScript.py')}")
+        print("==================================================")
+        
+        # Check if default location is valid
+        if default_api_valid:
+            print(f"Default module file exists at one of these locations:")
+            for path in default_module_paths["module_paths"]:
+                print(f"  - {path}")
+                
+            use_default = input("Press Enter to use default path, or type a custom path: ")
+            
+            if not use_default.strip():
+                # Use default path
+                os.environ["RESOLVE_SCRIPT_API"] = default_api_path
+                api_path = default_api_path
+                if "RESOLVE_SCRIPT_API" in config:
+                    del config["RESOLVE_SCRIPT_API"]  # Remove custom path
+                    modified = True
+                print(f"Using default path: {default_api_path}")
+            else:
+                # Use custom path
+                custom_path = use_default
+                # Check if they provided the file itself or just a directory
+                if os.path.isfile(custom_path):
+                    # User provided the actual file path
+                    module_dir = os.path.dirname(custom_path)
+                    if os.path.basename(custom_path) == "DaVinciResolveScript.py":
+                        # Set the parent directory as API path
+                        api_parent = os.path.dirname(module_dir) if os.path.basename(module_dir) == "Modules" else module_dir
+                        os.environ["RESOLVE_SCRIPT_API"] = api_parent
+                        api_path = api_parent
+                        config["RESOLVE_SCRIPT_API"] = api_parent
+                        modified = True
+                        print(f"Set API path to: {api_parent} (based on file: {custom_path})")
+                    else:
+                        print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
+                        print(f"Using path anyway: {custom_path}")
+                        os.environ["RESOLVE_SCRIPT_API"] = module_dir
+                        api_path = module_dir
+                        config["RESOLVE_SCRIPT_API"] = module_dir
+                        modified = True
+                elif os.path.isdir(custom_path):
+                    # User provided a directory
+                    # Check if it has the module directly or in a Modules subdirectory
+                    custom_module_info = find_module_locations(custom_path)
+                    if custom_module_info["module_paths"]:
+                        # Found the module in or under the specified directory
+                        os.environ["RESOLVE_SCRIPT_API"] = custom_path
+                        api_path = custom_path
+                        config["RESOLVE_SCRIPT_API"] = custom_path
+                        modified = True
+                        print(f"Found module at: {custom_module_info['module_paths'][0]}")
+                        print(f"Set API path to: {custom_path}")
+                    else:
+                        print(f"Warning: DaVinciResolveScript.py not found at or under: {custom_path}")
+                        print(f"Using path anyway: {custom_path}")
+                        os.environ["RESOLVE_SCRIPT_API"] = custom_path
+                        api_path = custom_path
+                        config["RESOLVE_SCRIPT_API"] = custom_path
+                        modified = True
+                else:
+                    print(f"Warning: Path not found: {custom_path}")
+                    print(f"Using default path: {default_api_path}")
+                    os.environ["RESOLVE_SCRIPT_API"] = default_api_path
+                    api_path = default_api_path
+                    if "RESOLVE_SCRIPT_API" in config:
+                        del config["RESOLVE_SCRIPT_API"]
+                        modified = True
+        else:
+            # Default doesn't exist either - keep asking until they provide a valid path
+            print(f"Default module file not found at standard locations")
+            print("Please provide a valid path to DaVinciResolveScript.py or its parent directory")
+            
+            while True:
+                custom_path = input("Enter path to DaVinciResolveScript.py or its parent directory: ")
+                if not custom_path.strip():
+                    print("Error: A path must be provided.")
+                    continue
+                
+                if os.path.isfile(custom_path):
+                    # User provided the actual file path
+                    module_dir = os.path.dirname(custom_path)
+                    if os.path.basename(custom_path) == "DaVinciResolveScript.py":
+                        # Set the parent directory as API path
+                        api_parent = os.path.dirname(module_dir) if os.path.basename(module_dir) == "Modules" else module_dir
+                        os.environ["RESOLVE_SCRIPT_API"] = api_parent
+                        api_path = api_parent
+                        config["RESOLVE_SCRIPT_API"] = api_parent
+                        modified = True
+                        print(f"Set API path to: {api_parent} (based on file: {custom_path})")
+                        break
+                    else:
+                        print(f"Warning: The specified file does not appear to be DaVinciResolveScript.py")
+                        retry = input("Use this path anyway? (y/n): ")
+                        if retry.lower() == 'y':
+                            os.environ["RESOLVE_SCRIPT_API"] = module_dir
+                            api_path = module_dir
+                            config["RESOLVE_SCRIPT_API"] = module_dir
+                            modified = True
+                            break
+                elif os.path.isdir(custom_path):
+                    # User provided a directory
+                    custom_module_info = find_module_locations(custom_path)
+                    if custom_module_info["module_paths"]:
+                        # Found the module in or under the specified directory
+                        os.environ["RESOLVE_SCRIPT_API"] = custom_path
+                        api_path = custom_path
+                        config["RESOLVE_SCRIPT_API"] = custom_path
+                        modified = True
+                        print(f"Found module at: {custom_module_info['module_paths'][0]}")
+                        print(f"Set API path to: {custom_path}")
+                        break
+                    else:
+                        print(f"Warning: DaVinciResolveScript.py not found at or under: {custom_path}")
+                        retry = input("Use this path anyway? (y/n): ")
+                        if retry.lower() == 'y':
+                            os.environ["RESOLVE_SCRIPT_API"] = custom_path
+                            api_path = custom_path
+                            config["RESOLVE_SCRIPT_API"] = custom_path
+                            modified = True
+                            break
+                else:
+                    print(f"Error: Path not found: {custom_path}")
+    
+    # Check if library file exists
+    lib_file_exists = os.path.isfile(lib_path)
+    print(f"Library exists at {lib_path}: {lib_file_exists}")
+    
+    if not lib_file_exists:
+        print("\n==================================================")
+        print(f"ERROR: DaVinci Resolve library not found!")
+        print(f"Expected at: {lib_path}")
+        print("==================================================")
+        
+        if default_lib_valid:
+            print(f"Default library exists at: {default_lib_path}")
+            use_default = input("Press Enter to use default path, or type a custom path: ")
+            if not use_default.strip():
+                os.environ["RESOLVE_SCRIPT_LIB"] = default_lib_path
+                lib_path = default_lib_path
+                if "RESOLVE_SCRIPT_LIB" in config:
+                    del config["RESOLVE_SCRIPT_LIB"]
+                    modified = True
+                print(f"Using default path: {default_lib_path}")
+            else:
+                custom_path = use_default
+                if os.path.isfile(custom_path):
+                    os.environ["RESOLVE_SCRIPT_LIB"] = custom_path
+                    lib_path = custom_path
+                    config["RESOLVE_SCRIPT_LIB"] = custom_path
+                    modified = True
+                    print(f"Using custom path: {custom_path}")
+                else:
+                    print(f"Warning: File not found at '{custom_path}'")
+                    print(f"Using default path: {default_lib_path}")
+                    os.environ["RESOLVE_SCRIPT_LIB"] = default_lib_path
+                    lib_path = default_lib_path
+                    if "RESOLVE_SCRIPT_LIB" in config:
+                        del config["RESOLVE_SCRIPT_LIB"]
+                        modified = True
+        else:
+            print(f"Default library also not found at: {default_lib_path}")
+            
+            # Keep asking until a valid path is provided
+            while True:
+                custom_path = input("Enter path to DaVinci Resolve library file: ")
+                if not custom_path.strip():
+                    print("Error: A path must be provided.")
+                    continue
+                
+                if os.path.isfile(custom_path):
+                    os.environ["RESOLVE_SCRIPT_LIB"] = custom_path
+                    lib_path = custom_path
+                    config["RESOLVE_SCRIPT_LIB"] = custom_path
+                    modified = True
+                    print(f"Using custom path: {custom_path}")
+                    break
+                else:
+                    print(f"Error: File not found at '{custom_path}'. Please try again.")
+    
+    # Save config if we have custom paths
+    if modified:
+        try:
+            # If config is empty, delete the file instead
+            if not config:
+                if os.path.exists(config_file):
+                    os.remove(config_file)
+                    print(f"Removed empty config file: {config_file}")
+            else:
+                with open(config_file, 'w') as f:
+                    json.dump(config, f, indent=2)
+                print(f"Saved custom paths to {config_file}")
+        except Exception as e:
+            logging.warning(f"Failed to save config file: {str(e)}")
+
+    # --------------------------------
+    # Add module paths to sys.path
+    # --------------------------------
+    logging.info("========== FINAL PATH CONFIGURATION ==========")
+    logging.info(f"Using RESOLVE_SCRIPT_API: {api_path}")
+    logging.info(f"Using RESOLVE_SCRIPT_LIB: {lib_path}")
+    
+    # Add all module locations to sys.path
+    module_info = find_module_locations(api_path)
+    for path in module_info["locations"]:
+        if path not in sys.path:
+            sys.path.append(path)
+            logging.info(f"Added to Python path: {path}")
+            
+    # Also add the API path itself if not already added
+    if api_path and api_path not in sys.path and os.path.exists(api_path):
+        sys.path.append(api_path)
+        logging.info(f"Added API path to Python path: {api_path}")
+    
+    logging.info("=============================================")
+    
+    # Test the import in a subprocess with our validated paths
+    success = test_resolve_import_in_subprocess()
+    if not success:
+        print("\nWARNING: DaVinci Resolve API import test failed in a separate process.")
+        print("This may indicate compatibility issues with your Python environment and DaVinci Resolve.")
+        print("The script will still attempt to continue, but may fail or crash.")
+        
+        should_continue = input("\nDo you want to continue anyway? (y/n): ")
+        if should_continue.lower() != 'y':
+            print("Exiting as requested.")
+            sys.exit(1)
+    
+    return success  # Return whether the import test was successful
+
+def test_resolve_import_in_subprocess():
+    """Test importing DaVinciResolveScript in a separate process for safety"""
+    logging.info("Testing DaVinci Resolve import in a separate process...")
+    
+    # Get the current API path
+    api_path = os.environ.get("RESOLVE_SCRIPT_API", "")
+    lib_path = os.environ.get("RESOLVE_SCRIPT_LIB", "")
+    
+    # Find all possible module locations
+    module_info = find_module_locations(api_path)
+    module_locations = module_info["locations"]
+    module_files = module_info["module_paths"]
+    
+    # Print found paths for debugging
+    print("Found module locations:")
+    for path in module_files:
+        print(f"  - {path}")
+    
+    # Add the API path itself and its parent to search paths
+    search_paths = []
+    if os.path.exists(api_path):
+        search_paths.append(api_path)
+    if os.path.exists(os.path.dirname(api_path)):
+        search_paths.append(os.path.dirname(api_path))
+        
+    # Add module locations to search paths
+    for loc in module_locations:
+        if loc not in search_paths and os.path.exists(loc):
+            search_paths.append(loc)
+    
+    print(f"Search paths to be used: {search_paths}")
+    
+    # Create a temporary Python file with the import test
+    with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
+        test_script = f.name
+        
+        # Write a script that attempts the import and exits with code 0 if successful
+        f.write(f'''
+import os
+import sys
+import glob
+
+# Set required environment variables
+os.environ["RESOLVE_SCRIPT_API"] = r"{api_path}"
+os.environ["RESOLVE_SCRIPT_LIB"] = r"{lib_path}"
+
+# Add all possible module paths to sys.path
+search_paths = {search_paths!r}
+for path in search_paths:
+    if path and path not in sys.path:
+        sys.path.append(path)
+        print(f"Added {{path}} to Python path")
+
+# Known module files
+module_files = {module_files!r}
+for module_file in module_files:
+    print(f"Known module file: {{module_file}}")
+
+# Print sys.path for debugging
+print(f"Python sys.path: {{sys.path}}")
+
+# Try direct import first
+try:
+    import DaVinciResolveScript
+    print("Successfully imported DaVinciResolveScript in test process")
+    sys.exit(0)
+except ImportError as e:
+    print(f"Standard import failed: {{e}}")
+
+# Try alternate import approaches
+for module_file in module_files:
+    module_dir = os.path.dirname(module_file)
+    module_name = os.path.splitext(os.path.basename(module_file))[0]
+    
+    try:
+        # Try adding module dir directly to path and importing
+        if module_dir not in sys.path:
+            sys.path.append(module_dir)
+            print(f"Added module directory {{module_dir}} directly to path")
+        
+        # Try to import again
+        import DaVinciResolveScript
+        print(f"Successfully imported DaVinciResolveScript after adding {{module_dir}}")
+        sys.exit(0)
+    except ImportError as e:
+        print(f"Import still failed with {{module_dir}} in path: {{e}}")
+
+# If all previous attempts failed, try more aggressive approaches
+# Try to load the module directly using importlib
+print("Trying direct module loading with importlib...")
+try:
+    import importlib.util
+    
+    for module_file in module_files:
+        try:
+            print(f"Trying to load {{module_file}} with importlib...")
+            spec = importlib.util.spec_from_file_location("DaVinciResolveScript", module_file)
+            if spec:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                print(f"Successfully loaded {{module_file}} with importlib")
+                sys.path.insert(0, os.path.dirname(module_file))
+                sys.exit(0)
+        except Exception as e:
+            print(f"Importlib loading failed for {{module_file}}: {{e}}")
+except Exception as e:
+    print(f"Importlib approach failed: {{e}}")
+
+print("All import attempts failed")
+sys.exit(1)
+''')
+        
+    try:
+        # Run the test script in a separate process
+        logging.info(f"Running import test script: {test_script}")
+        result = subprocess.run(
+            [sys.executable, test_script],
+            capture_output=True, 
+            text=True,
+            timeout=10  # Set a timeout to avoid hanging
+        )
+        
+        # Check the result
+        if result.returncode == 0:
+            logging.info("Import test succeeded in subprocess")
+            logging.info(f"Subprocess stdout: {result.stdout}")
+            return True
+        else:
+            logging.error(f"Import test failed in subprocess with exit code {result.returncode}")
+            logging.error(f"Subprocess stderr: {result.stderr}")
+            logging.error(f"Subprocess stdout: {result.stdout}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logging.error("Import test timed out - this suggests the import would hang or crash")
+        return False
+    except Exception as e:
+        logging.error(f"Error running import test: {e}")
+        return False
+    finally:
+        # Clean up the temporary file
+        try:
+            os.unlink(test_script)
+        except:
+            pass
+
+# Validate and set up Resolve paths
+validate_resolve_paths()
 
 # Import DaVinci Resolve Script
 try:
@@ -32,6 +521,13 @@ try:
     logging.info("Successfully imported DaVinciResolveScript")
 except ImportError as e:
     logging.error(f"Failed to import DaVinciResolveScript: {str(e)}")
+    print("\nError importing DaVinci Resolve script libraries. Please check:")
+    print("1. DaVinci Resolve is properly installed")
+    print("2. You have the correct version of Python (64-bit)")
+    print("3. The paths to DaVinci Resolve libraries are correct")
+    print("\nPaths checked:")
+    print(f"API path: {os.environ.get('RESOLVE_SCRIPT_API', 'Not set')}")
+    print(f"Library path: {os.environ.get('RESOLVE_SCRIPT_LIB', 'Not set')}")
     sys.exit(1)
 
 def get_resolve():
