@@ -100,17 +100,34 @@ def validate_resolve_paths():
     # Force prompt option for debugging - set to False in production
     force_module_prompt = False
     
-    # Check if module file exists at the standard location
-    module_path = os.path.join(api_path, "Modules", "DaVinciResolveScript.py")
-    print(f"Checking for module at: {module_path}")
-    module_exists = os.path.isfile(module_path)
-    print(f"Module exists at expected path: {module_exists}")
+    # Check if module file exists at any possible location
+    possible_module_paths = [
+        os.path.join(api_path, "Modules", "DaVinciResolveScript.py"),  # Standard location
+        os.path.join(api_path, "DaVinciResolveScript.py"),             # Directly in API path
+    ]
     
-    # If module doesn't exist at standard location or we're forcing the prompt
+    # For paths stored in config (non-standard locations), check parent directory too
+    if "RESOLVE_SCRIPT_API" in config:
+        possible_module_paths.append(os.path.join(os.path.dirname(api_path), "DaVinciResolveScript.py"))
+    
+    # Check all possible locations
+    module_exists = False
+    found_module_path = None
+    
+    print("Checking possible module locations:")
+    for path in possible_module_paths:
+        exists = os.path.isfile(path)
+        print(f"  - {path}: {'Found' if exists else 'Not found'}")
+        if exists:
+            module_exists = True
+            found_module_path = path
+            break
+    
+    # If module doesn't exist at any checked location or we're forcing the prompt
     if not module_exists or force_module_prompt:
         print("\n==================================================")
         print(f"DaVinciResolveScript.py not found at standard location:")
-        print(f"{module_path}")
+        print(f"{os.path.join(api_path, 'Modules', 'DaVinciResolveScript.py')}")
         print("==================================================")
         
         # Check if default location is valid
@@ -322,16 +339,33 @@ def validate_resolve_paths():
     logging.info(f"Using RESOLVE_SCRIPT_API: {api_path}")
     logging.info(f"Using RESOLVE_SCRIPT_LIB: {lib_path}")
     
-    # Add standard module path first
-    module_path = os.path.join(api_path, "Modules")
-    if os.path.exists(module_path) and module_path not in sys.path:
-        sys.path.append(module_path)
-        logging.info(f"Added to Python path: {module_path}")
+    # Check potential module locations
+    module_locations = []
+    
+    # Standard module path
+    standard_module_path = os.path.join(api_path, "Modules")
+    if os.path.exists(standard_module_path):
+        module_locations.append(standard_module_path)
         
-    # Also add the API path itself
+    # Direct in API path
+    if os.path.exists(api_path) and os.path.isfile(os.path.join(api_path, "DaVinciResolveScript.py")):
+        module_locations.append(api_path)
+        
+    # Parent directory
+    parent_path = os.path.dirname(api_path)
+    if os.path.exists(parent_path) and os.path.isfile(os.path.join(parent_path, "DaVinciResolveScript.py")):
+        module_locations.append(parent_path)
+    
+    # Add all found locations to sys.path
+    for path in module_locations:
+        if path not in sys.path:
+            sys.path.append(path)
+            logging.info(f"Added to Python path: {path}")
+            
+    # Also add the API path itself if not already added
     if api_path and api_path not in sys.path and os.path.exists(api_path):
         sys.path.append(api_path)
-        logging.info(f"Added to Python path: {api_path}")
+        logging.info(f"Added API path to Python path: {api_path}")
     
     logging.info("=============================================")
     
@@ -366,10 +400,13 @@ def test_resolve_import_in_subprocess():
     module_locations = []
     if os.path.isfile(standard_location):
         module_locations.append(os.path.dirname(standard_location))
+        print(f"Found module at standard location: {standard_location}")
     if os.path.isfile(direct_location):
         module_locations.append(os.path.dirname(direct_location))
+        print(f"Found module directly in API path: {direct_location}")
     if os.path.isfile(parent_location):
         module_locations.append(os.path.dirname(parent_location))
+        print(f"Found module in parent directory: {parent_location}")
     
     # Add the API path itself and its parent
     search_paths = []
@@ -416,6 +453,15 @@ for path in search_paths:
         module_files.append(possible_file)
         print(f"Found module at: {{possible_file}}")
 
+# Also check if the file itself is in any of the search paths
+for path in search_paths:
+    for item in os.listdir(path) if os.path.exists(path) else []:
+        if item == "DaVinciResolveScript.py":
+            full_path = os.path.join(path, item)
+            if full_path not in module_files:
+                module_files.append(full_path)
+                print(f"Found additional module at: {{full_path}}")
+
 if not module_files:
     print("ERROR: No module files found in search paths")
     sys.exit(1)
@@ -448,6 +494,27 @@ for module_file in module_files:
         sys.exit(0)
     except ImportError as e:
         print(f"Import still failed with {{module_dir}} in path: {{e}}")
+
+# If all previous attempts failed, try more aggressive approaches
+# Try to load the module directly using importlib
+print("Trying direct module loading with importlib...")
+try:
+    import importlib.util
+    
+    for module_file in module_files:
+        try:
+            print(f"Trying to load {{module_file}} with importlib...")
+            spec = importlib.util.spec_from_file_location("DaVinciResolveScript", module_file)
+            if spec:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                print(f"Successfully loaded {{module_file}} with importlib")
+                sys.path.insert(0, os.path.dirname(module_file))
+                sys.exit(0)
+        except Exception as e:
+            print(f"Importlib loading failed for {{module_file}}: {{e}}")
+except Exception as e:
+    print(f"Importlib approach failed: {{e}}")
 
 print("All import attempts failed")
 sys.exit(1)
