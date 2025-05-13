@@ -8,8 +8,9 @@ from ctypes import wintypes
 import logging
 import argparse
 import json
+import tempfile
+import subprocess
 from pydub import AudioSegment
-import DaVinciResolveScript as dvr_script
 import csv
 
 # Configure logging
@@ -95,6 +96,73 @@ def validate_resolve_paths():
     logging.info(f"Using RESOLVE_SCRIPT_API: {os.environ.get('RESOLVE_SCRIPT_API')}")
     logging.info(f"Using RESOLVE_SCRIPT_LIB: {os.environ.get('RESOLVE_SCRIPT_LIB')}")
 
+def test_resolve_import_in_subprocess():
+    """Test importing DaVinciResolveScript in a separate process for safety"""
+    logging.info("Testing DaVinci Resolve import in a separate process...")
+    
+    # Create a temporary Python file with the import test
+    with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
+        test_script = f.name
+        
+        # Write a script that attempts the import and exits with code 0 if successful
+        f.write(f'''
+import os
+import sys
+
+# Set required environment variables
+os.environ["RESOLVE_SCRIPT_API"] = r"{os.environ.get('RESOLVE_SCRIPT_API')}"
+os.environ["RESOLVE_SCRIPT_LIB"] = r"{os.environ.get('RESOLVE_SCRIPT_LIB')}"
+
+# Add module path to sys.path
+resolve_script_path = os.path.join(os.environ.get('RESOLVE_SCRIPT_API', ''), 'Modules')
+if os.path.exists(resolve_script_path) and resolve_script_path not in sys.path:
+    sys.path.append(resolve_script_path)
+    print(f"Added {{resolve_script_path}} to Python path")
+
+# Try to import the module
+try:
+    import DaVinciResolveScript
+    print("Successfully imported DaVinciResolveScript in test process")
+    sys.exit(0)  # Success
+except Exception as e:
+    print(f"Error importing DaVinciResolveScript in test process: {{e}}")
+    sys.exit(1)  # Failure
+''')
+    
+    try:
+        # Run the test script in a separate process
+        logging.info(f"Running import test script: {test_script}")
+        result = subprocess.run(
+            [sys.executable, test_script],
+            capture_output=True, 
+            text=True,
+            timeout=10  # Set a timeout to avoid hanging
+        )
+        
+        # Check the result
+        if result.returncode == 0:
+            logging.info("Import test succeeded in subprocess")
+            logging.info(f"Subprocess stdout: {result.stdout}")
+            return True
+        else:
+            logging.error(f"Import test failed in subprocess with exit code {result.returncode}")
+            logging.error(f"Subprocess stderr: {result.stderr}")
+            logging.error(f"Subprocess stdout: {result.stdout}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logging.error("Import test timed out - this suggests the import would hang or crash")
+        return False
+    except Exception as e:
+        logging.error(f"Error running import test: {e}")
+        return False
+    finally:
+        # Clean up the temporary file
+        try:
+            os.unlink(test_script)
+        except:
+            pass
+
 # Validate and set up Resolve paths
 validate_resolve_paths()
 
@@ -104,12 +172,30 @@ if resolve_script_path not in sys.path and os.path.exists(resolve_script_path):
     sys.path.append(resolve_script_path)
     logging.info(f"Added {resolve_script_path} to Python path")
 
+# First test the import in a subprocess for safety
+if not test_resolve_import_in_subprocess():
+    print("\nWARNING: DaVinci Resolve API import test failed in a separate process.")
+    print("This may indicate compatibility issues with your Python environment and DaVinci Resolve.")
+    print("The script will still attempt to continue, but may fail or crash.")
+    
+    should_continue = input("\nDo you want to continue anyway? (y/n): ")
+    if should_continue.lower() != 'y':
+        print("Exiting as requested.")
+        sys.exit(1)
+
 # Import DaVinci Resolve Script
 try:
     import DaVinciResolveScript as dvr_script
     logging.info("Successfully imported DaVinciResolveScript")
 except ImportError as e:
     logging.error(f"Failed to import DaVinciResolveScript: {str(e)}")
+    print("\nError importing DaVinci Resolve script libraries. Please check:")
+    print("1. DaVinci Resolve is properly installed")
+    print("2. You have the correct version of Python (64-bit)")
+    print("3. The paths to DaVinci Resolve libraries are correct")
+    print("\nPaths checked:")
+    print(f"API path: {os.environ.get('RESOLVE_SCRIPT_API', 'Not set')}")
+    print(f"Library path: {os.environ.get('RESOLVE_SCRIPT_LIB', 'Not set')}")
     sys.exit(1)
 
 def get_resolve():
