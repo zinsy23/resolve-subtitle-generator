@@ -16,9 +16,24 @@ logging.basicConfig(level=logging.INFO)
 
 # Set Resolve environment variables if not set
 if not os.getenv("RESOLVE_SCRIPT_API"):
-    os.environ["RESOLVE_SCRIPT_API"] = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+    # Set default paths based on OS
+    if sys.platform.startswith("win"):  # Windows
+        os.environ["RESOLVE_SCRIPT_API"] = r"C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+    elif sys.platform == "darwin":  # macOS
+        os.environ["RESOLVE_SCRIPT_API"] = r"/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+    elif sys.platform.startswith("linux"):  # Linux
+        os.environ["RESOLVE_SCRIPT_API"] = r"/opt/resolve/Developer/Scripting"
+    logging.info(f"Set RESOLVE_SCRIPT_API to {os.environ['RESOLVE_SCRIPT_API']}")
+
 if not os.getenv("RESOLVE_SCRIPT_LIB"):
-    os.environ["RESOLVE_SCRIPT_LIB"] = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+    # Set default paths based on OS
+    if sys.platform.startswith("win"):  # Windows
+        os.environ["RESOLVE_SCRIPT_LIB"] = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+    elif sys.platform == "darwin":  # macOS
+        os.environ["RESOLVE_SCRIPT_LIB"] = r"/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+    elif sys.platform.startswith("linux"):  # Linux
+        os.environ["RESOLVE_SCRIPT_LIB"] = r"/opt/resolve/libs/Fusion/fusionscript.so"
+    logging.info(f"Set RESOLVE_SCRIPT_LIB to {os.environ['RESOLVE_SCRIPT_LIB']}")
 
 # Add Resolve scripting module path
 resolve_script_path = os.path.join(os.environ.get('RESOLVE_SCRIPT_API', ''), 'Modules')
