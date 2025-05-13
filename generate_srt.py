@@ -17,7 +17,8 @@ import csv
 logging.basicConfig(level=logging.INFO)
 
 def find_module_locations(base_path):
-    """Find all possible locations of DaVinciResolveScript.py based on a base path."""
+    """Find possible locations of DaVinciResolveScript.py based on a base path.
+    Only checks the standard location and directly in the specified path."""
     locations = []
     module_paths = []
     
@@ -32,14 +33,7 @@ def find_module_locations(base_path):
     if os.path.isfile(direct_location):
         locations.append(base_path)
         module_paths.append(direct_location)
-        
-    # Check parent directory (parent_of_base_path/DaVinciResolveScript.py)
-    parent_path = os.path.dirname(base_path)
-    parent_location = os.path.join(parent_path, "DaVinciResolveScript.py")
-    if os.path.isfile(parent_location):
-        locations.append(parent_path)
-        module_paths.append(parent_location)
-        
+    
     return {
         "locations": locations,  # Directories containing the module
         "module_paths": module_paths  # Full paths to the module files
