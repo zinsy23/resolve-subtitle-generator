@@ -8,38 +8,6 @@ A Python script that generates SRT subtitle files from audio files using DaVinci
 2. **Python 3.6+** (64-bit version)
 3. **Required Python packages** (install using `pip install -r requirements.txt`)
 
-## Environment Setup
-
-Before running the script, you need to set up the following environment variables (figure out your paths if necessary):
-
-### Windows
-```powershell
-$env:RESOLVE_SCRIPT_API = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
-$env:RESOLVE_SCRIPT_LIB = "C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
-$env:PYTHONPATH = "$env:PYTHONPATH;$env:RESOLVE_SCRIPT_API\Modules"
-```
-
-**Note**: You may consider making it permantent by going to `sysdm.cpl` and changing user environment variables from there. Set those three variables above to their values.
-
-### macOS
-```bash
-export RESOLVE_SCRIPT_API="/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-export RESOLVE_SCRIPT_LIB="/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-export PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules"
-```
-
-**Note**: You can permanently set environment variables in macOS by adding them to your shell configuration file (e.g., `~/.bash_profile`, `~/.zshrc`, or `~/.bashrc`). Add the following lines to the file:
-
-### Linux
-```bash
-export RESOLVE_SCRIPT_API="/opt/resolve/Developer/Scripting"
-export RESOLVE_SCRIPT_LIB="/opt/resolve/libs/Fusion/fusionscript.so"
-export PYTHONPATH="$PYTHONPATH:$RESOLVE_SCRIPT_API/Modules"
-```
-
-**Note**: To permanently set environment variables in Linux, you can add them to your shell configuration file. For example, you can add the following lines to your `~/.bashrc` or `~/.bash_profile` file:
-
-
 ## Usage
 
 1. **Start DaVinci Resolve** and create a new project or open an existing one. It won't work without Resolve running as it still uses the UI for functionality, but still fortunately in an automated way.
@@ -81,7 +49,7 @@ For each input audio file, a corresponding SRT file will be created in the same 
 
 If you encounter issues:
 1. Ensure DaVinci Resolve is running and a project is open
-2. Verify the environment variables are set correctly
+2. Verify the environment variables are set correctly, which the program should let you define via user input if it isn't correct
 3. Check that you have the required Python packages installed
 4. Make sure you have write permissions in the output directory
 
