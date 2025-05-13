@@ -207,10 +207,10 @@ def validate_resolve_paths():
         else:
             # Default doesn't exist either - keep asking until they provide a valid path
             print(f"Default module file not found at standard locations")
-            print("Please provide a valid path to DaVinciResolveScript.py or its parent directory")
+            print("Please provide a valid path to DaVinciResolveScript.py or the directory containing it")
             
             while True:
-                custom_path = input("Enter path to DaVinciResolveScript.py or its parent directory: ")
+                custom_path = input("Enter path to DaVinciResolveScript.py or its containing directory: ")
                 if not custom_path.strip():
                     print("Error: A path must be provided.")
                     continue
@@ -384,13 +384,11 @@ def test_resolve_import_in_subprocess():
     for path in module_files:
         print(f"  - {path}")
     
-    # Add the API path itself and its parent to search paths
+    # Add the API path itself to search paths
     search_paths = []
     if os.path.exists(api_path):
         search_paths.append(api_path)
-    if os.path.exists(os.path.dirname(api_path)):
-        search_paths.append(os.path.dirname(api_path))
-        
+    
     # Add module locations to search paths
     for loc in module_locations:
         if loc not in search_paths and os.path.exists(loc):
@@ -452,27 +450,6 @@ for module_file in module_files:
         sys.exit(0)
     except ImportError as e:
         print(f"Import still failed with {{module_dir}} in path: {{e}}")
-
-# If all previous attempts failed, try more aggressive approaches
-# Try to load the module directly using importlib
-print("Trying direct module loading with importlib...")
-try:
-    import importlib.util
-    
-    for module_file in module_files:
-        try:
-            print(f"Trying to load {{module_file}} with importlib...")
-            spec = importlib.util.spec_from_file_location("DaVinciResolveScript", module_file)
-            if spec:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                print(f"Successfully loaded {{module_file}} with importlib")
-                sys.path.insert(0, os.path.dirname(module_file))
-                sys.exit(0)
-        except Exception as e:
-            print(f"Importlib loading failed for {{module_file}}: {{e}}")
-except Exception as e:
-    print(f"Importlib approach failed: {{e}}")
 
 print("All import attempts failed")
 sys.exit(1)
