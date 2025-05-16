@@ -45,6 +45,76 @@ For each input audio file, a corresponding SRT file will be created in the same 
     - I haven't tested single line SRT creation yet since it has linebreak logic in it for double lines
 - I generated this program using AI until it did my desired behavior, so please excuse any brevity in this project since I'm more concerned about being able to use it as a tool for myself.
 
+## Executing script from any directory
+
+Here's how I recommend you execute the script from any directory:
+
+#### **On Windows:**
+
+1. Set an environment variable to the directory of the script:
+
+   a. Press `Win + R` to open the Run dialog
+
+   b. Type `sysdm.cpl ,3` and press Enter
+
+   c. Click on the `Environment Variables` button
+   
+   d. Click the `New` button under the `User variables` section.
+
+   e. Name the variable something that makes it clear what it is, like `RESSUB` for Resolve Subtitle Generator.
+
+   f. Set the variable value to the full path of the Python script.
+
+**Note:** You don't need to create an environment variable, but it prevents needing to explicitly define the full path in the next step (where I specify `%RESSUB%`).
+
+2. I recommend setting the command line alias in Powershell since it's easy to permanently store.
+
+   a. Open a Powershell shell.
+
+   b. Open the profile file for editing. You can do this by running `notepad $PROFILE` in the shell. The path to the file being edited is `$PROFILE`. You can check the path by running `echo $PROFILE` in the shell.
+
+   c. Add the following line to the file (assuming `ressub` is the name of the command you want to use globally):
+
+   ```powershell
+   function ressub { python "%RESSUB%\generate_srt.py" $args[0] }
+   ```
+
+   d. Save the file and exit the text editor.
+
+   e. Close and reopen the Powershell shell to apply the changes. It should work anywhere now.
+
+#### **On Mac:**
+
+1. Assuming you are using the default zsh shell, open the `.zshrc` file for editing.
+
+   a. Run `nano ~/.zshrc` in the terminal. If you use VIM, you can use `vim ~/.zshrc` instead.
+
+   b. Add the following line to the file (assuming `ressub` is the name of the command you want to use globally):
+
+   ```zsh
+   ressub() { python "/path/to/script/generate_srt.py" "$@" }
+   ```
+   
+   c. Save the file and exit the text editor.
+
+   d. Close and reopen the terminal to apply the changes. It should work anywhere now. You can restart zsh by running `exec zsh` in the ZSH shell.
+
+#### **On Linux:**
+
+1. Assuming you are using the default bash shell, open the `.bashrc` file for editing.
+
+   a. Run `nano ~/.bashrc` in the terminal. If you use VIM, you can use `vim ~/.bashrc` instead.
+
+   b. Add the following line to the file (assuming `ressub` is the name of the command you want to use globally):
+
+   ```bash
+   ressub() { python "/path/to/script/generate_srt.py" "$@" }
+   ```
+   
+   c. Save the file and exit the text editor.
+
+   d. Close and reopen the terminal to apply the changes. It should work anywhere now. You can restart bash by running `exec bash` in the bash shell.
+   
 ## Troubleshooting
 
 If you encounter issues:
