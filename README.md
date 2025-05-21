@@ -10,6 +10,8 @@ A Python script that generates SRT subtitle files from audio files using DaVinci
 
 ## Usage
 
+### Command Line Interface (CLI)
+
 1. **Start DaVinci Resolve** and create a new project or open an existing one. It won't work without Resolve running as it still uses the UI for functionality, but still fortunately in an automated way.
 2. **Run the script** with one or more audio files as arguments:
 
@@ -25,9 +27,54 @@ python generate_srt.py "samples/*.MP3"
 ```
 
 The script will:
+
 1. Create a timeline for each audio file
 2. Generate subtitles using Resolve's auto-captioning
 3. Export the subtitles as SRT files in the same directory as the input files
+
+### Right-Click Context Menu Integration
+
+You can also set up right-click context menu integration that allows you to generate subtitles directly from your file explorer.
+
+#### Setting Up the Context Menu
+
+1. Choose the appropriate setup script for your operating system:
+   - Windows: `install_right_click_menu_windows.bat` (run as Administrator)
+   - macOS: `install_right_click_menu_mac.sh`
+   - Linux: `install_right_click_menu_linux.sh` or `install_right_click_menu_linux_simple.sh`
+
+2. Run the script to add the context menu entries for audio and video files.
+
+3. To use the feature, simply right-click on any supported audio or video file and select "Generate Subtitles with DaVinci Resolve" from the context menu.
+
+#### How It Works
+
+The installation scripts create:
+1. Registry entries (Windows) or file associations (macOS/Linux) for audio and video file types
+2. A wrapper script that properly handles file paths and runs the Python script with the selected file as an argument
+3. Context menu entries that invoke this wrapper when you right-click on media files
+
+The wrapper script ensures that:
+- The Python script runs from its original location regardless of where the media file is located
+- The media file path is properly passed as an argument to the Python script
+- You get appropriate feedback about the processing status
+
+#### Supported File Types
+- Audio: mp3, wav
+- Video: mp4, mov, wmv, avi, mkv, m4v, mts
+
+#### Multiple File Selection
+The context menu integration supports selecting multiple files at once. When you select multiple audio and video files and use the "Generate Subtitles with DaVinci Resolve" option, all files will be processed sequentially in a single operation, which is more efficient than processing each file separately.
+
+#### Removing the Context Menu
+- Windows: Run `uninstall_right_click_menu_windows.bat` as Administrator
+- macOS: Run `uninstall_right_click_menu_mac.sh`
+- Linux: Run `uninstall_right_click_menu_linux.sh`
+
+#### Reinstallation/Updating
+If you want to update the context menu integration after making changes to the scripts, you can simply run the installation script again. It will update the existing integration with any changes you've made.
+
+The context menu integration works exactly the same as the CLI, just with a more convenient access point. It still requires DaVinci Resolve to be running and follows all the same processing steps.
 
 ## Output
 
