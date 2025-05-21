@@ -1,87 +1,184 @@
 @echo off
+setlocal EnableDelayedExpansion
+
+:: Check if running as administrator
+>nul 2>&1 "%SYSTEMROOT%\system32\cacls.exe" "%SYSTEMROOT%\system32\config\system"
+if %errorlevel% NEQ 0 (
+    echo This script requires administrator privileges.
+    echo Please run this script as administrator.
+    echo Right-click the script and select "Run as administrator".
+    pause
+    exit /b 1
+)
+
 echo Setting up context menu for DaVinci Resolve Subtitle Generator...
 
 :: Get the full path of the generate_srt.py script
 set "SCRIPT_PATH=%~dp0generate_srt.py"
+
+:: Try to get the full path to Python
+for /f "delims=" %%i in ('where python 2^>nul') do (
+    set "PYTHON_EXE=%%i"
+    goto python_found
+)
 set "PYTHON_EXE=python"
+:python_found
+
+echo Using Python: %PYTHON_EXE%
 
 :: Verify Python is installed and available
-%PYTHON_EXE% --version >nul 2>&1
+"%PYTHON_EXE%" --version >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo Python not found. Please make sure Python is installed and in your PATH.
     pause
     exit /b 1
 )
 
-:: Create a wrapper batch script that will be called by the context menu
-set "WRAPPER_SCRIPT=%~dp0run_subtitle_generator.bat"
+:: Run a test to verify script exists and is accessible
+if not exist "%SCRIPT_PATH%" (
+    echo ERROR: Script not found: %SCRIPT_PATH%
+    pause
+    exit /b 1
+)
 
-:: Create the wrapper script
-echo @echo off > "%WRAPPER_SCRIPT%"
-echo setlocal >> "%WRAPPER_SCRIPT%"
-echo echo Running DaVinci Resolve Subtitle Generator... >> "%WRAPPER_SCRIPT%"
-echo echo Selected file: %%1 >> "%WRAPPER_SCRIPT%"
-echo cd /d "%~dp0" >> "%WRAPPER_SCRIPT%"
-echo %PYTHON_EXE% "%SCRIPT_PATH%" "%%~1" >> "%WRAPPER_SCRIPT%"
-echo if %%ERRORLEVEL%% neq 0 ( >> "%WRAPPER_SCRIPT%"
-echo   echo Error: The script encountered an error. >> "%WRAPPER_SCRIPT%"
-echo   pause >> "%WRAPPER_SCRIPT%"
-echo   exit /b 1 >> "%WRAPPER_SCRIPT%"
-echo ) >> "%WRAPPER_SCRIPT%"
-echo echo Subtitle generation completed. >> "%WRAPPER_SCRIPT%"
-echo pause >> "%WRAPPER_SCRIPT%"
+:: First remove existing context menu entries for clean install
+echo Removing any existing context menu entries for clean installation...
+:: Remove older registry entries
+reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSRT" /f >nul 2>&1
+reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSRTMulti" /f >nul 2>&1
+reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSubtitles" /f >nul 2>&1
+reg delete "HKEY_CLASSES_ROOT\*\shell\DaVinciSubs" /f >nul 2>&1
+reg delete "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs" /f >nul 2>&1
+reg delete "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs" /f >nul 2>&1
 
-:: Make sure the wrapper script is executable
-attrib +x "%WRAPPER_SCRIPT%" >nul 2>&1
+:: Remove from user registry as well
+reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT" /f >nul 2>&1
+reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRTMulti" /f >nul 2>&1
+reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSubtitles" /f >nul 2>&1
+reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\DaVinciSubs" /f >nul 2>&1
+reg delete "HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\audio\shell\DaVinciSubs" /f >nul 2>&1
+reg delete "HKEY_CURRENT_USER\Software\Classes\SystemFileAssociations\video\shell\DaVinciSubs" /f >nul 2>&1
 
-:: Create registry entries for right-click on audio files
-echo Adding context menu for audio files...
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp3\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp3\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp3\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Create the samples directory if it doesn't exist
+mkdir "%~dp0samples" 2>nul
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.wav\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.wav\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.wav\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Use the all-in-one handler script path
+set "HANDLER_SCRIPT=%~dp0subtitle_handler.bat"
 
-:: Add support for video file formats
-echo Adding context menu for video files...
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp4\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp4\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mp4\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+echo.
+echo Adding context menu entries for the handler script...
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.mov\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mov\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mov\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Define the launcher command that uses the handler script
+set "LAUNCHER=cmd.exe /c \"%HANDLER_SCRIPT%\" \"%%1\""
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.wmv\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.wmv\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.wmv\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Add to SystemFileAssociations for audio and video files
+echo Adding to audio file types...
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs" /ve /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs" /v "MultiSelectModel" /t REG_SZ /d "Player" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs\command" /ve /t REG_SZ /d "%LAUNCHER%" /f
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.avi\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.avi\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.avi\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+echo Adding to video file types...
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs" /ve /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs" /v "MultiSelectModel" /t REG_SZ /d "Player" /f
+reg add "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs\command" /ve /t REG_SZ /d "%LAUNCHER%" /f
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.mkv\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mkv\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mkv\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Add the main context menu entry for file extensions
+echo Adding specific file extension entries...
 
-:: Add more video formats
-reg add "HKEY_CURRENT_USER\Software\Classes\.mts\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mts\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.mts\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: List of extensions to add
+set "audio_exts=.mp3 .wav .aac .flac .ogg .m4a"
+set "video_exts=.mp4 .mov .mkv .avi .wmv .m4v .mts"
 
-reg add "HKEY_CURRENT_USER\Software\Classes\.m4v\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.m4v\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\.m4v\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Register each extension
+for %%E in (%audio_exts% %video_exts%) do (
+    echo Adding for %%E files...
+    reg add "HKEY_CLASSES_ROOT\%%E\shell\DaVinciSubs" /ve /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
+    reg add "HKEY_CLASSES_ROOT\%%E\shell\DaVinciSubs" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
+    reg add "HKEY_CLASSES_ROOT\%%E\shell\DaVinciSubs" /v "MultiSelectModel" /t REG_SZ /d "Player" /f
+    reg add "HKEY_CLASSES_ROOT\%%E\shell\DaVinciSubs\command" /ve /t REG_SZ /d "%LAUNCHER%" /f
+)
 
-:: Also add for file selection in general (works when multiple files are selected)
-echo Adding context menu for file selection...
-reg add "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT" /t REG_SZ /d "Generate Subtitles with DaVinci Resolve" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT" /v "Icon" /t REG_SZ /d "%PYTHON_EXE%,0" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT" /v "MultiSelectModel" /t REG_SZ /d "Player" /f
-reg add "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT\command" /t REG_SZ /d "\"%WRAPPER_SCRIPT%\" \"%%1\"" /f
+:: Create uninstall script
+set "UNINSTALL_SCRIPT=%~dp0uninstall_right_click_menu_windows.bat"
 
+echo @echo off > "%UNINSTALL_SCRIPT%"
+echo setlocal EnableDelayedExpansion >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo :: Check if running as administrator >> "%UNINSTALL_SCRIPT%"
+echo ^>nul 2^>^&1 "%%SYSTEMROOT%%\system32\cacls.exe" "%%SYSTEMROOT%%\system32\config\system" >> "%UNINSTALL_SCRIPT%"
+echo if %%errorlevel%% NEQ 0 ( >> "%UNINSTALL_SCRIPT%"
+echo     echo This script requires administrator privileges. >> "%UNINSTALL_SCRIPT%"
+echo     echo Please run this script as administrator. >> "%UNINSTALL_SCRIPT%"
+echo     echo Right-click the script and select "Run as administrator". >> "%UNINSTALL_SCRIPT%"
+echo     pause >> "%UNINSTALL_SCRIPT%"
+echo     exit /b 1 >> "%UNINSTALL_SCRIPT%"
+echo ) >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo echo Removing context menu for DaVinci Resolve Subtitle Generator... >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo :: Remove registry entries >> "%UNINSTALL_SCRIPT%"
+echo echo Removing registry entries... >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSubtitles" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSRT" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\*\shell\GenerateSRTMulti" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\*\shell\DaVinciSubs" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\SystemFileAssociations\audio\shell\DaVinciSubs" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CLASSES_ROOT\SystemFileAssociations\video\shell\DaVinciSubs" /f >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSubtitles" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRT" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\GenerateSRTMulti" /f >> "%UNINSTALL_SCRIPT%"
+echo reg delete "HKEY_CURRENT_USER\Software\Classes\*\shell\DaVinciSubs" /f >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo :: Remove specific file extensions >> "%UNINSTALL_SCRIPT%"
+echo set "extensions=.mp3 .wav .aac .flac .ogg .m4a .mp4 .mov .mkv .avi .wmv .m4v .mts" >> "%UNINSTALL_SCRIPT%"
+echo for %%%%E in (%%extensions%%) do ( >> "%UNINSTALL_SCRIPT%"
+echo     reg delete "HKEY_CLASSES_ROOT\%%%%E\shell\DaVinciSubs" /f >> "%UNINSTALL_SCRIPT%"
+echo ) >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo :: Delete wrapper scripts >> "%UNINSTALL_SCRIPT%"
+echo set "SCRIPTS=%%~dp0subtitle_handler.bat %%~dp0file_collector.bat %%~dp0run_subtitle_generator.bat %%~dp0run_subtitle_generator.vbs %%~dp0selected_files.txt %%~dp0.processing" >> "%UNINSTALL_SCRIPT%"
+echo for %%%%F in (%%SCRIPTS%%) do ( >> "%UNINSTALL_SCRIPT%"
+echo     if exist "%%%%F" ( >> "%UNINSTALL_SCRIPT%"
+echo         echo Removing %%%%~nxF... >> "%UNINSTALL_SCRIPT%"
+echo         del "%%%%F" >> "%UNINSTALL_SCRIPT%"
+echo     ) >> "%UNINSTALL_SCRIPT%"
+echo ) >> "%UNINSTALL_SCRIPT%"
+echo. >> "%UNINSTALL_SCRIPT%"
+echo echo Context menu entries removed successfully! >> "%UNINSTALL_SCRIPT%"
+echo echo You may need to restart Explorer for the changes to take effect. >> "%UNINSTALL_SCRIPT%"
+echo echo. >> "%UNINSTALL_SCRIPT%"
+echo echo To restart Explorer now, type Y and press Enter. >> "%UNINSTALL_SCRIPT%"
+echo set /p restart_now=Restart Explorer now? [Y/N]: >> "%UNINSTALL_SCRIPT%"
+echo if /i "%%restart_now%%" == "Y" ( >> "%UNINSTALL_SCRIPT%"
+echo     echo Restarting Explorer... >> "%UNINSTALL_SCRIPT%"
+echo     taskkill /f /im explorer.exe >> "%UNINSTALL_SCRIPT%"
+echo     start explorer.exe >> "%UNINSTALL_SCRIPT%"
+echo ) >> "%UNINSTALL_SCRIPT%"
+echo pause >> "%UNINSTALL_SCRIPT%"
+
+echo.
 echo Context menu setup completed successfully!
-echo You can now right-click on audio and video files to generate subtitles.
+echo.
+echo You can now right-click on audio and video files and select:
+echo "Generate Subtitles with DaVinci Resolve"
+echo.
+echo This uses a completely different approach:
+echo 1. Each selected file is seamlessly added to a collection
+echo 2. After a short delay, a single window opens to process all files
+echo 3. All files are processed in a single Python command
+echo.
+echo Important: No windows will appear when you first select files.
+echo After about 1 second, a single command window will open with all files.
+echo.
+echo To restart Explorer now and apply changes immediately, type Y and press Enter.
+set /p restart_now=Restart Explorer now? [Y/N]: 
+if /i "%restart_now%" == "Y" (
+    echo Restarting Explorer...
+    taskkill /f /im explorer.exe
+    start explorer.exe
+)
+echo.
 pause 
