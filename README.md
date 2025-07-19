@@ -37,6 +37,7 @@ For each input audio file, a corresponding SRT file will be created in the same 
 
 ## Notes
 
+- To minimize current random glitches that exist (see [issues](https://github.com/zinsy23/resolve-subtitle-generator/issues)), let the script itself import the media rather than yourself and have the master bin selected
 - The script requires DaVinci Resolve to be running and a project to be open
 - The script will create timelines in the current project
 - Audio files should be in a format supported by DaVinci Resolve (MP3, WAV, etc.)
