@@ -1098,17 +1098,32 @@ def get_subtitle_items(timeline):
         logging.error(f"Error getting subtitle items: {str(e)}")
         return None
 
-def format_timecode(frames):
-    """Convert frames to SRT timecode format (assuming 24fps)."""
-    total_seconds = frames / 24  # Convert frames to seconds
+def get_timeline_framerate(timeline):
+    """Get the framerate of the timeline."""
+    try:
+        settings = timeline.GetSetting()
+        if settings and 'timelineFrameRate' in settings:
+            fps = float(settings['timelineFrameRate'])
+            logging.info(f"Timeline framerate: {fps}")
+            return fps
+        else:
+            logging.warning("Could not get timeline framerate from settings, defaulting to 24 fps")
+            return 24.0
+    except Exception as e:
+        logging.error(f"Error getting timeline framerate: {str(e)}, defaulting to 24 fps")
+        return 24.0
+
+def format_timecode(frames, fps):
+    """Convert frames to SRT timecode format using the specified FPS."""
+    total_seconds = frames / fps  # Convert frames to seconds
     hours = int(total_seconds // 3600)
     minutes = int((total_seconds % 3600) // 60)
     seconds = int(total_seconds % 60)
     milliseconds = int((total_seconds * 1000) % 1000)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
-def write_srt_file(srt_path, subtitle_items):
-    """Write subtitle items to an SRT file."""
+def write_srt_file(srt_path, subtitle_items, fps):
+    """Write subtitle items to an SRT file using the specified FPS."""
     try:
         with open(srt_path, 'w', encoding='utf-8') as f:
             for i, item in enumerate(subtitle_items, 1):
@@ -1120,7 +1135,7 @@ def write_srt_file(srt_path, subtitle_items):
                 
                 # Write the subtitle entry
                 f.write(f"{i}\n")
-                f.write(f"{format_timecode(item['start'])} --> {format_timecode(item['end'])}\n")
+                f.write(f"{format_timecode(item['start'], fps)} --> {format_timecode(item['end'], fps)}\n")
                 f.write(formatted_text + "\n\n")
         
         logging.info(f"Successfully wrote SRT file to {srt_path}")
@@ -1274,9 +1289,13 @@ def generate_srt_for_file(audio_file):
             logging.error("Failed to get subtitle items")
             return False
             
+        # Get timeline framerate
+        fps = get_timeline_framerate(timeline)
+        logging.info(f"Using framerate: {fps} fps")
+            
         # Write SRT file
         logging.info(f"Writing SRT to: {output_path}")
-        if not write_srt_file(output_path, subtitle_items):
+        if not write_srt_file(output_path, subtitle_items, fps):
             logging.error("Failed to write SRT file")
             return False
             
