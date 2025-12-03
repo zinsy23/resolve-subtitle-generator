@@ -1078,6 +1078,10 @@ def get_subtitle_items(timeline):
             
         logging.info(f"Found {len(items)} items in subtitle track")
         
+        # Get timeline start frame to offset subtitles to start at 00:00:00,000
+        timeline_start_frame = timeline.GetStartFrame()
+        logging.info(f"Timeline start frame: {timeline_start_frame}")
+        
         # Extract text and timing from items
         subtitle_items = []
         for i, item in enumerate(items):
@@ -1085,10 +1089,15 @@ def get_subtitle_items(timeline):
             logging.info(f"Raw text from Resolve (item {i}): {repr(text)}")  # Use repr to show special characters
             start = item.GetStart()
             end = item.GetEnd()
+            
+            # Offset by timeline start frame so subtitles start at 00:00:00,000
+            start_offset = start - timeline_start_frame
+            end_offset = end - timeline_start_frame
+            
             subtitle_items.append({
                 'text': text,
-                'start': start,
-                'end': end,
+                'start': start_offset,
+                'end': end_offset,
                 'index': i + 1
             })
             logging.info(f"Found text in item {i}: {text}")
