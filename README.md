@@ -77,7 +77,7 @@ Here's how I recommend you execute the script from any directory:
    c. Add the following line to the file (assuming `ressub` is the name of the command you want to use globally):
 
    ```powershell
-   function ressub { python "%RESSUB%\generate_srt.py" $args[0] }
+   function ressub { python "%RESSUB%\generate_srt.py" $args }
    ```
 
    d. Save the file and exit the text editor.
