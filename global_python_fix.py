@@ -16,7 +16,8 @@ def get_system_python():
     if platform.system() == "Darwin":  # macOS
         return "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13"
     elif platform.system() == "Windows":  # Windows
-        # Get the current Python executable path
+        return sys.executable
+    elif platform.system() == "Linux":
         return sys.executable
     else:
         print(f"Unsupported operating system: {platform.system()}")
@@ -141,6 +142,38 @@ def ulaw2lin(fragment, width):
         print(f"\n❌ PyDub still has issues: {e}")
         return False
 
+def install_audioop_lts_linux():
+    """Install audioop-lts on Linux, prompting the user about --break-system-packages."""
+    print("\nOn Linux, pip may block package installs to protect the system Python environment.")
+    print("Installing audioop-lts requires the --break-system-packages flag, which tells pip")
+    print("to install into your user packages (~/.local/lib/...) bypassing that guard.")
+    print("This is safe and does not affect system packages, but some users prefer to use")
+    print("a virtual environment instead.")
+    print()
+    response = input("Proceed with --break-system-packages? [Y/n]: ").strip().lower()
+    if response in ("", "y", "yes"):
+        print("\nInstalling audioop-lts...")
+        try:
+            subprocess.run(
+                [SYSTEM_PYTHON, "-m", "pip", "install", "--user", "--break-system-packages", "audioop-lts"],
+                check=True
+            )
+            print("audioop-lts installed successfully.")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Installation failed: {e}")
+            return False
+    else:
+        print()
+        print("Installation skipped.")
+        print("To fix this manually using a virtual environment:")
+        print("  1. python3 -m venv /path/to/your/venv")
+        print("  2. /path/to/your/venv/bin/pip install -r requirements.txt")
+        print("  3. Update your 'ressub' alias in ~/.bashrc to use /path/to/your/venv/bin/python")
+        print("     instead of the system python3.")
+        return False
+
+
 def reinstall_pydub():
     """Completely reinstall PyDub."""
     print("\nReinstalling PyDub...")
@@ -204,14 +237,33 @@ def main():
     # Show system information
     show_system_info()
     
+    if platform.system() == "Linux":
+        print("\nStep 1: Installing audioop-lts (Python 3.13 compatibility package)")
+        success = install_audioop_lts_linux()
+        if not success:
+            return
+
+        print("\nStep 2: Verifying pydub import...")
+        try:
+            subprocess.run(
+                [SYSTEM_PYTHON, "-c",
+                 "from pydub import AudioSegment; print('SUCCESS: PyDub imported successfully!')"],
+                check=True
+            )
+            print("\nSuccess! PyDub should now work.")
+        except subprocess.CalledProcessError:
+            print("\nPydub import still failing. Try reinstalling pydub:")
+            print(f"  {SYSTEM_PYTHON} -m pip install --user --break-system-packages --force-reinstall pydub")
+        return
+
     # First try reinstalling PyDub
     print("\nStep 1: Reinstalling PyDub")
     reinstall_success = reinstall_pydub()
-    
+
     # Create audioop module
     print("\nStep 2: Creating audioop module")
     audioop_success = create_complete_audioop()
-    
+
     if audioop_success:
         print("\n🎉 Success! PyDub should now work with your global Python installation.")
         print(f"To run your script, use: {SYSTEM_PYTHON} your_script.py")
