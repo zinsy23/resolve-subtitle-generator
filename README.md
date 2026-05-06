@@ -1,6 +1,6 @@
 # Resolve Subtitle Generator
 
-A Python script that generates SRT subtitle files from audio files using DaVinci Resolve's auto-captioning feature.
+A Python script that generates SRT subtitle files from audio and video files using DaVinci Resolve's auto-captioning feature.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ A Python script that generates SRT subtitle files from audio files using DaVinci
 ## Usage
 
 1. **Start DaVinci Resolve** and create a new project or open an existing one. It won't work without Resolve running as it still uses the UI for functionality, but still fortunately in an automated way.
-2. **Run the script** with one or more audio files as arguments:
+2. **Run the script** with one or more audio or video files as arguments:
 
 ```bash
 # Process a single file
@@ -20,29 +20,30 @@ python generate_srt.py "path/to/your/audio.mp3"
 # Process multiple files
 python generate_srt.py "audio1.mp3" "audio2.mp3" "audio3.mp3"
 
-# Process all MP3 files in a directory
-python generate_srt.py "samples/*.MP3"
+# Process all M4A files in a directory
+python generate_srt.py "samples/*.m4a"
 ```
 
 The script will:
-1. Create a timeline for each audio file
+1. Create a timeline for each file
 2. Generate subtitles using Resolve's auto-captioning
 3. Export the subtitles as SRT files in the same directory as the input files
 
 ## Output
 
-For each input audio file, a corresponding SRT file will be created in the same directory with the same name (but with .srt extension). For example:
+For each input file, a corresponding SRT file will be created in the same directory as the original source with the same name (but with `.srt` extension). For example:
 - Input: `samples/audio1.mp3`
 - Output: `samples/audio1.srt`
+
+This holds even when using conversion flags — the SRT is always saved next to the original, not the converted temp file.
 
 ## Notes
 
 - To minimize current random glitches that exist (see [issues](https://github.com/zinsy23/resolve-subtitle-generator/issues)), let the script itself import the media rather than yourself and have the master bin selected
 - The script requires DaVinci Resolve to be running and a project to be open
 - The script will create timelines in the current project
-- Audio files should be in a format supported by DaVinci Resolve (MP3, WAV, etc.)
 - The generated SRT files include bold formatting and proper line breaks
-- The version of my script does my typical preferred settings, so you may consider modifying the `create_subtitles_from_audio()` function in generate_srt.py to match your settings. 
+- The version of my script does my typical preferred settings, so you may consider modifying the `create_subtitles_from_audio()` function in generate_srt.py to match your settings.
     - I haven't tested single line SRT creation yet since it has linebreak logic in it for double lines
 - I generated this program using AI until it did my desired behavior, so please excuse any brevity in this project since I'm more concerned about being able to use it as a tool for myself.
 
@@ -116,6 +117,60 @@ Here's how I recommend you execute the script from any directory:
 
    d. Close and reopen the terminal to apply the changes. It should work anywhere now. You can restart bash by running `exec bash` in the bash shell.
    
+## Audio/Video Conversion
+
+If Resolve doesn't support the audio codec in your file (e.g. AAC in an M4A on Linux), you can convert it on the fly before importing using a `--<format>` flag. The converted file is temporary and the SRT is always saved next to the original source file.
+
+```bash
+# Convert a single M4A to WAV before importing
+python generate_srt.py "episode.m4a" --wav
+
+# Convert to a specific directory instead of temp
+python generate_srt.py "episode.m4a" --wav "/path/to/output"
+
+# Convert all M4A files to MP3 before importing
+python generate_srt.py "samples/*.m4a" --mp3
+
+# Mix converted and non-converted files in one command
+python generate_srt.py "episode1.m4a" --wav "episode2.wav" "episode3.m4a" --mp3
+
+# Convert audio track in a video file (video stream is preserved, only audio is transcoded)
+python generate_srt.py "recording.mp4" --mp3
+```
+
+### Supported conversion formats
+
+| Flag | Format |
+|------|--------|
+| `--mp3` | MP3 |
+| `--wav` | WAV |
+| `--aac` | AAC |
+| `--flac` | FLAC |
+| `--opus` | Opus |
+| `--ogg` | OGG Vorbis |
+| `--aiff` | AIFF |
+
+### Video container compatibility
+
+For video files, only the audio stream is transcoded — the video is copied as-is. Not all audio formats work in every container:
+
+| Container | Supported audio formats |
+|-----------|------------------------|
+| `.mp4` | `--mp3`, `--aac`, `--opus`, `--wav` |
+| `.mov` | `--mp3`, `--aac`, `--wav` |
+| `.mkv` | `--mp3`, `--aac`, `--wav`, `--flac`, `--opus` |
+| `.avi` | `--mp3`, `--aac` |
+
+Unsupported combinations are rejected with a clear error message listing what's allowed.
+
+### ffmpeg Setup
+
+ffmpeg is required for conversion flags. If it's not installed, the script will print an error. Install it using one of the following (these are common methods, not exhaustive):
+
+- **Linux:** `sudo apt install ffmpeg` (or your distro's package manager equivalent)
+- **macOS:** `brew install ffmpeg` (or https://ffmpeg.org/download.html)
+- **Windows:** `winget install ffmpeg` (or https://ffmpeg.org/download.html)
+
 ## Troubleshooting
 
 If you encounter issues:
@@ -184,37 +239,29 @@ If you encounter issues installing PyAudio on macOS, try the following steps:
    
    Also make sure your environment variables are set properly for the specific Python version you're using.
 
-### PyDub/AudioOp Issues on macOS with Python 3.13
+### PyDub/AudioOp Issues on Python 3.13
 
-If you're using Python 3.13 on macOS and encounter errors related to `audioop`, `_audioop`, or `pyaudioop` when importing PyDub, this is a known compatibility issue. Run the provided global Python fix script:
+Python 3.13 removed the `audioop` module from the standard library, which PyDub depends on. This affects all platforms. Run the provided fix script:
 
 ```bash
-./global_python_fix.py
+python3 global_python_fix.py
 ```
 
-This script:
-1. Reinstalls PyDub with the system Python 3.13
-2. Creates compatibility modules (`_audioop.py`, `audioop.py`, and `pyaudioop.py`)
-3. Tests that PyDub can be imported and used
+**What the script does per platform:**
 
-The fix works by creating dummy implementations of the audio processing modules that PyDub expects but are missing or renamed in Python 3.13.
-
-**After running the fix:**
-- Use the global Python 3.13 interpreter to run your scripts:
-  ```bash
-  /Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13 generate_srt.py "your_audio_file.mp3"
-  ```
-- Make sure to use the full path to the Python 3.13 interpreter rather than relying on environment variables or aliases
+- **Linux** — installs `audioop-lts` (a maintained backport of `audioop` for Python 3.13+) via pip. You will be prompted before it runs `--break-system-packages`, which installs to your user packages (`~/.local/lib/...`) and is safe. If you prefer a virtual environment instead, the script will print guidance for that.
+- **macOS** — reinstalls PyDub and creates compatibility shim modules for `audioop`.
+- **Windows** — same as macOS.
 
 **Known errors this fixes:**
 ```
 ModuleNotFoundError: No module named 'audioop'
-```
-or
-```
 ModuleNotFoundError: No module named 'pyaudioop'
 ```
 
-**Note:** The fix adds dummy implementations of the audio operations modules, which should be sufficient for basic PyDub functionality but may not work for all advanced audio processing operations.
+If you'd prefer to fix it manually on Linux without the script:
+```bash
+pip install --user --break-system-packages audioop-lts
+```
 
-If you still encounter issues after running the fix script, consider downgrading to Python 3.9 which has better compatibility with audio processing libraries.
+If you still encounter issues after running the fix script, consider using a virtual environment with Python 3.11 or 3.12 which still include `audioop` natively.
