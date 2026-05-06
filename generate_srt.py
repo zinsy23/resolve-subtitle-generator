@@ -740,38 +740,47 @@ def parse_args(argv):
         """Return the format string if token is a supported --<fmt> flag, else None."""
         return token[2:] if token in CONVERT_FLAGS else None
 
+    def peek_flag(argv, i):
+        """Return (fmt, output_dir, new_i) if argv[i] is a conversion flag, else (None, None, i)."""
+        if i >= len(argv):
+            return None, None, i
+        fmt = is_convert_flag(argv[i])
+        if not fmt:
+            return None, None, i
+        i += 1
+        output_dir = None
+        if i < len(argv):
+            next_token = argv[i]
+            ext = os.path.splitext(next_token)[1].lower()
+            if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
+                output_dir = next_token
+                i += 1
+        return fmt, output_dir, i
+
     entries = []
     i = 0
     while i < len(argv):
         token = argv[i]
 
-        # If we hit a bare flag with no preceding file, skip it
+        # Skip a bare flag with no preceding file
         if is_convert_flag(token):
             i += 1
             continue
 
-        # Expand wildcards for this source token
-        if '*' in token or '?' in token:
-            sources = sorted(glob.glob(token))
-        else:
-            sources = [token]
+        # Collect a run of consecutive file tokens (no flag in between).
+        # This handles shell-expanded wildcards where the shell splits
+        # "*.m4a --wav" into individual filenames before Python sees them.
+        sources = []
+        while i < len(argv) and not is_convert_flag(argv[i]):
+            tok = argv[i]
+            if '*' in tok or '?' in tok:
+                sources.extend(sorted(glob.glob(tok)))
+            else:
+                sources.append(tok)
+            i += 1
 
-        i += 1
-
-        # Check for an optional conversion flag immediately after
-        fmt = None
-        output_dir = None
-        if i < len(argv):
-            fmt = is_convert_flag(argv[i])
-            if fmt:
-                i += 1
-                # Check for an optional output directory after the flag
-                if i < len(argv):
-                    next_token = argv[i]
-                    ext = os.path.splitext(next_token)[1].lower()
-                    if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
-                        output_dir = next_token
-                        i += 1
+        # Check for an optional conversion flag after the file group
+        fmt, output_dir, i = peek_flag(argv, i)
 
         for source in sources:
             if fmt:
