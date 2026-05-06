@@ -1326,13 +1326,13 @@ def get_current_project():
         logging.error(f"Error getting current project: {str(e)}")
         return None
 
-def generate_srt_for_file(audio_file):
+def generate_srt_for_file(audio_file, srt_output_path=None):
     """Generate SRT file for a given audio file."""
     try:
         logging.info(f"Starting SRT generation for: {audio_file}")
-        
-        # Get output path
-        output_path = os.path.splitext(audio_file)[0] + ".srt"
+
+        # Get output path — use explicit path if provided (e.g. when audio_file is a temp conversion)
+        output_path = srt_output_path if srt_output_path else os.path.splitext(audio_file)[0] + ".srt"
         logging.info(f"Output SRT will be saved to: {output_path}")
         
         # Get Resolve object
@@ -1569,7 +1569,8 @@ def main():
             if conv:
                 print(f"  Using converted file: {conv}")
 
-            if generate_srt_for_file(import_path):
+            srt_path = os.path.splitext(src)[0] + ".srt"
+            if generate_srt_for_file(import_path, srt_output_path=srt_path):
                 successful += 1
                 print(f"Successfully generated SRT for {os.path.basename(src)}")
             else:
