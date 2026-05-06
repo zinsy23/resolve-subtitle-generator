@@ -21,6 +21,27 @@ logging.basicConfig(level=logging.INFO)
 # To add a new format, add it here — flags and usage messages are derived from this.
 SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aiff"}
 
+# Video container extensions and the audio formats verified to work in each.
+# For video files, only the audio stream is transcoded; video is copied as-is.
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
+VIDEO_CONTAINER_AUDIO_COMPAT = {
+    ".mp4": {"mp3", "aac", "opus", "wav"},
+    ".mov": {"mp3", "aac", "wav"},
+    ".mkv": {"mp3", "aac", "wav", "flac", "opus"},
+    ".avi": {"mp3", "aac"},
+}
+
+# Maps audio format name to the ffmpeg codec to use
+AUDIO_FORMAT_CODEC = {
+    "mp3":  "libmp3lame",
+    "aac":  "aac",
+    "opus": "libopus",
+    "wav":  "pcm_s16le",
+    "flac": "flac",
+    "ogg":  "libvorbis",
+    "aiff": "pcm_s16le",
+}
+
 def find_module_locations(base_path):
     """Find possible locations of DaVinciResolveScript.py based on a base path.
     Only checks the standard location and directly in the specified path."""
@@ -682,9 +703,12 @@ def check_ffmpeg():
     return shutil.which("ffmpeg") is not None
 
 def convert_audio(source_path, fmt, output_dir=None):
-    """Convert source_path to the given format extension via ffmpeg.
+    """Convert source_path to the given format via ffmpeg.
 
-    fmt is any extension ffmpeg supports (e.g. 'wav', 'mp3', 'flac').
+    For audio-only files: transcodes to the target format.
+    For video files: copies the video stream and transcodes only the audio,
+    keeping the same container extension.
+
     If output_dir is None the OS temp directory is used.
     Appends _1, _2, … to the stem if the destination already exists.
     Returns the output path on success, or "FAILED" on error.
@@ -699,21 +723,43 @@ def convert_audio(source_path, fmt, output_dir=None):
         print(f"Supported conversion flags: {supported}")
         return "FAILED"
 
+    src_ext = os.path.splitext(source_path)[1].lower()
+    is_video = src_ext in VIDEO_EXTENSIONS
+
+    # For video files, validate the container+audio format combination
+    if is_video:
+        allowed = VIDEO_CONTAINER_AUDIO_COMPAT.get(src_ext, set())
+        if fmt not in allowed:
+            print(f"Error: '{fmt}' audio is not supported in {src_ext} containers.")
+            supported = ", ".join(f"--{f}" for f in sorted(allowed))
+            print(f"Supported formats for {src_ext}: {supported}")
+            return "FAILED"
+        # Video output keeps the same container extension
+        out_ext = src_ext
+    else:
+        out_ext = f".{fmt}"
+
+    codec = AUDIO_FORMAT_CODEC.get(fmt)
+    if not codec:
+        print(f"Error: No ffmpeg codec mapping found for format '{fmt}'.")
+        return "FAILED"
+
     stem = os.path.splitext(os.path.basename(source_path))[0]
     dest_dir = output_dir if output_dir else tempfile.gettempdir()
     os.makedirs(dest_dir, exist_ok=True)
 
-    candidate = os.path.join(dest_dir, f"{stem}.{fmt}")
+    candidate = os.path.join(dest_dir, f"{stem}{out_ext}")
     counter = 1
     while os.path.exists(candidate):
-        candidate = os.path.join(dest_dir, f"{stem}_{counter}.{fmt}")
+        candidate = os.path.join(dest_dir, f"{stem}_{counter}{out_ext}")
         counter += 1
 
-    result = subprocess.run(
-        ["ffmpeg", "-i", source_path, candidate],
-        capture_output=True,
-        text=True
-    )
+    if is_video:
+        cmd = ["ffmpeg", "-i", source_path, "-c:v", "copy", "-c:a", codec, candidate, "-y"]
+    else:
+        cmd = ["ffmpeg", "-i", source_path, "-c:a", codec, candidate, "-y"]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         logging.error(f"ffmpeg conversion failed: {result.stderr}")
         print(f"Error: ffmpeg failed to convert {os.path.basename(source_path)}")
