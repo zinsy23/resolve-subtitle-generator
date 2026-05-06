@@ -2,6 +2,7 @@
 import sys
 import os
 import glob
+import shutil
 import time
 import ctypes
 from ctypes import wintypes
@@ -15,6 +16,10 @@ import csv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
+# Supported conversion formats for the --<fmt> flags.
+# To add a new format, add it here — flags and usage messages are derived from this.
+SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aiff"}
 
 def find_module_locations(base_path):
     """Find possible locations of DaVinciResolveScript.py based on a base path.
@@ -671,6 +676,111 @@ def expand_file_args(args):
         else:
             expanded_files.append(arg)
     return expanded_files
+
+def check_ffmpeg():
+    """Return True if ffmpeg is available on PATH."""
+    return shutil.which("ffmpeg") is not None
+
+def convert_audio(source_path, fmt, output_dir=None):
+    """Convert source_path to the given format extension via ffmpeg.
+
+    fmt is any extension ffmpeg supports (e.g. 'wav', 'mp3', 'flac').
+    If output_dir is None the OS temp directory is used.
+    Appends _1, _2, … to the stem if the destination already exists.
+    Returns the output path on success, or "FAILED" on error.
+    """
+    if not check_ffmpeg():
+        print("Error: ffmpeg was not found on your PATH.")
+        print("Install it using one of the following (these are common methods, not exhaustive):")
+        print("  Linux:   sudo apt install ffmpeg  (or your distro's package manager equivalent)")
+        print("  macOS:   brew install ffmpeg  (or https://ffmpeg.org/download.html)")
+        print("  Windows: winget install ffmpeg  (or https://ffmpeg.org/download.html)")
+        supported = ", ".join(f"--{fmt}" for fmt in sorted(SUPPORTED_CONVERSION_FORMATS))
+        print(f"Supported conversion flags: {supported}")
+        return "FAILED"
+
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    dest_dir = output_dir if output_dir else tempfile.gettempdir()
+    os.makedirs(dest_dir, exist_ok=True)
+
+    candidate = os.path.join(dest_dir, f"{stem}.{fmt}")
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(dest_dir, f"{stem}_{counter}.{fmt}")
+        counter += 1
+
+    result = subprocess.run(
+        ["ffmpeg", "-i", source_path, candidate],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        logging.error(f"ffmpeg conversion failed: {result.stderr}")
+        print(f"Error: ffmpeg failed to convert {os.path.basename(source_path)}")
+        return "FAILED"
+
+    logging.info(f"Converted {source_path} -> {candidate}")
+    return candidate
+
+
+def parse_args(argv):
+    """Parse argv into a list of (source_path, converted_path_or_None) tuples.
+
+    Syntax per entry:
+        <file> [--<fmt> [dest_dir]]
+
+    --<fmt> can be any format ffmpeg supports (e.g. --wav, --mp3, --flac).
+    The optional dest_dir after the flag is consumed if the next token doesn't
+    look like an audio source file. Wildcards in file arguments are expanded.
+    """
+    AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
+    CONVERT_FLAGS = {f"--{fmt}" for fmt in SUPPORTED_CONVERSION_FORMATS}
+
+    def is_convert_flag(token):
+        """Return the format string if token is a supported --<fmt> flag, else None."""
+        return token[2:] if token in CONVERT_FLAGS else None
+
+    entries = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+
+        # If we hit a bare flag with no preceding file, skip it
+        if is_convert_flag(token):
+            i += 1
+            continue
+
+        # Expand wildcards for this source token
+        if '*' in token or '?' in token:
+            sources = sorted(glob.glob(token))
+        else:
+            sources = [token]
+
+        i += 1
+
+        # Check for an optional conversion flag immediately after
+        fmt = None
+        output_dir = None
+        if i < len(argv):
+            fmt = is_convert_flag(argv[i])
+            if fmt:
+                i += 1
+                # Check for an optional output directory after the flag
+                if i < len(argv):
+                    next_token = argv[i]
+                    ext = os.path.splitext(next_token)[1].lower()
+                    if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
+                        output_dir = next_token
+                        i += 1
+
+        for source in sources:
+            if fmt:
+                converted = convert_audio(source, fmt, output_dir)
+                entries.append((source, converted))
+            else:
+                entries.append((source, None))
+
+    return entries
 
 def get_audio_duration(audio_file):
     """Get the duration of an audio file in seconds."""
@@ -1388,40 +1498,51 @@ def clear_subtitle_tracks(timeline):
 def main():
     # Get files to process
     if len(sys.argv) > 1:
-        # Process files provided as arguments
-        files_to_process = []
-        for arg in sys.argv[1:]:
-            if '*' in arg or '?' in arg:
-                # Expand wildcards
-                files_to_process.extend(glob.glob(arg))
-            else:
-                files_to_process.append(arg)
+        entries = parse_args(sys.argv[1:])
     else:
         # Process all MP3 files in samples directory
         samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
-        files_to_process = [os.path.join(samples_dir, f) for f in os.listdir(samples_dir) if f.endswith('.MP3')]
-    
-    if not files_to_process:
+        entries = [
+            (os.path.join(samples_dir, f), None)
+            for f in os.listdir(samples_dir) if f.endswith('.MP3')
+        ]
+
+    if not entries:
         print("No files to process")
         return
-    
+
+    # Drop entries where conversion failed or source not found
+    valid_entries = []
+    for src, conv in entries:
+        if conv is None and not os.path.exists(src):
+            print(f"File not found, skipping: {src}")
+            continue
+        if conv == "FAILED":
+            # convert_audio failed; error already printed
+            continue
+        valid_entries.append((src, conv))
+
+    if not valid_entries:
+        print("No valid files to process")
+        return
+
     # Get initial Resolve setup
     try:
         resolve = get_resolve()
         if not resolve:
             print("Failed to get Resolve object")
             return
-            
+
         project = get_current_project()
         if not project:
             print("No project is currently open. Please open a project first.")
             return
-            
+
         media_pool = project.GetMediaPool()
         if not media_pool:
             print("Failed to get media pool")
             return
-            
+
         root_folder = media_pool.GetRootFolder()
         if not root_folder:
             print("Failed to get root folder")
@@ -1429,25 +1550,27 @@ def main():
     except Exception as e:
         print(f"Error setting up Resolve: {str(e)}")
         return
-    
+
     # Process each file sequentially
     successful = 0
-    for file_path in files_to_process:
+    for src, conv in valid_entries:
+        import_path = conv if conv else src
         try:
-            print(f"\nProcessing {os.path.basename(file_path)}...")
-            
-            # Generate SRT
-            if generate_srt_for_file(file_path):
+            print(f"\nProcessing {os.path.basename(src)}...")
+            if conv:
+                print(f"  Using converted file: {conv}")
+
+            if generate_srt_for_file(import_path):
                 successful += 1
-                print(f"Successfully generated SRT for {os.path.basename(file_path)}")
+                print(f"Successfully generated SRT for {os.path.basename(src)}")
             else:
-                print(f"Failed to generate SRT for {os.path.basename(file_path)}")
-                
+                print(f"Failed to generate SRT for {os.path.basename(src)}")
+
         except Exception as e:
-            print(f"Error processing {os.path.basename(file_path)}: {str(e)}")
+            print(f"Error processing {os.path.basename(src)}: {str(e)}")
             continue
-    
-    print(f"\nProcessed {len(files_to_process)} file(s), {successful} successful")
+
+    print(f"\nProcessed {len(valid_entries)} file(s), {successful} successful")
 
 if __name__ == "__main__":
     main() 
