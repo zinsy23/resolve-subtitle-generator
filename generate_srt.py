@@ -1689,7 +1689,7 @@ def main():
         samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
         entries = [
             (os.path.join(samples_dir, f), None)
-            for f in os.listdir(samples_dir) if f.endswith('.MP3')
+            for f in os.listdir(samples_dir) if f.lower().endswith('.mp3')
         ]
         do_concat = False
         do_export = False
