@@ -858,14 +858,15 @@ def parse_args(argv):
     GLOBAL_FLAGS = {"--concat", "--export", "--import"}
 
     # Strip global flags first so they don't interfere with per-file parsing
-    do_concat = "--concat" in argv
-    do_export = "--export" in argv
-    do_import_only = "--import" in argv
-    argv = [a for a in argv if a not in GLOBAL_FLAGS]
+    argv_lower = [a.lower() for a in argv]
+    do_concat = "--concat" in argv_lower
+    do_export = "--export" in argv_lower
+    do_import_only = "--import" in argv_lower
+    argv = [a for a in argv if a.lower() not in GLOBAL_FLAGS]
 
     def is_convert_flag(token):
         """Return the format string if token is a supported --<fmt> flag, else None."""
-        return token[2:] if token in CONVERT_FLAGS else None
+        return token[2:].lower() if token.lower() in CONVERT_FLAGS else None
 
     def peek_flag(argv, i):
         """Return (fmt, output_dir, new_i) if argv[i] is a conversion flag, else (None, None, i)."""
@@ -1674,9 +1675,10 @@ def clear_subtitle_tracks(timeline):
 def main():
     # Handle conv-dir preference flags before anything else
     argv = sys.argv[1:]
+    argv_lower = [a.lower() for a in argv]
     for flag in CONV_DIR_FLAGS:
-        if flag in argv:
-            idx = argv.index(flag)
+        if flag in argv_lower:
+            idx = argv_lower.index(flag)
             value = argv[idx + 1] if idx + 1 < len(argv) else None
             handle_conv_dir_flag(value)
 
