@@ -21,6 +21,9 @@ logging.basicConfig(level=logging.INFO)
 # To add a new format, add it here — flags and usage messages are derived from this.
 SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aiff"}
 
+PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preferences.json")
+CONV_DIR_FLAGS = {"--conv-dir", "--conversion-dir", "--set-conv-dir", "--set-conversion-dir", "--temp-dir", "--tmp-dir"}
+
 # Video container extensions and the audio formats verified to work in each.
 # For video files, only the audio stream is transcoded; video is copied as-is.
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
@@ -698,6 +701,56 @@ def expand_file_args(args):
             expanded_files.append(arg)
     return expanded_files
 
+def load_preferences():
+    """Load preferences.json, returning an empty dict if it doesn't exist."""
+    if os.path.exists(PREFS_FILE):
+        try:
+            with open(PREFS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logging.warning(f"Failed to load preferences: {e}")
+    return {}
+
+def save_preferences(prefs):
+    """Save preferences dict to preferences.json, deleting the file if empty."""
+    try:
+        if prefs:
+            with open(PREFS_FILE, 'w') as f:
+                json.dump(prefs, f, indent=2)
+        elif os.path.exists(PREFS_FILE):
+            os.remove(PREFS_FILE)
+    except Exception as e:
+        logging.warning(f"Failed to save preferences: {e}")
+
+def handle_conv_dir_flag(value):
+    """Set or clear the conversion_output_dir preference and exit."""
+    if not value:
+        print("Usage: --conv-dir <path>  (set conversion output directory)")
+        print("       --conv-dir clear   (reset to system temp)")
+        print("       --conv-dir temp    (reset to system temp)")
+        sys.exit(0)
+
+    prefs = load_preferences()
+    if value.lower() in ("clear", "temp"):
+        if "conversion_output_dir" in prefs:
+            del prefs["conversion_output_dir"]
+            save_preferences(prefs)
+            print("Conversion output directory reset to system temp.")
+        else:
+            print("No conversion output directory was set (already using system temp).")
+    else:
+        abs_value = os.path.abspath(value)
+        prefs["conversion_output_dir"] = abs_value
+        save_preferences(prefs)
+        print(f"Conversion output directory set to: {abs_value}")
+    sys.exit(0)
+
+def get_conversion_output_dir():
+    """Return the preferred conversion output dir, or None to use system temp."""
+    prefs = load_preferences()
+    return prefs.get("conversion_output_dir", None)
+
+
 def check_ffmpeg():
     """Return True if ffmpeg is available on PATH."""
     return shutil.which("ffmpeg") is not None
@@ -745,7 +798,7 @@ def convert_audio(source_path, fmt, output_dir=None):
         return "FAILED"
 
     stem = os.path.splitext(os.path.basename(source_path))[0]
-    dest_dir = output_dir if output_dir else tempfile.gettempdir()
+    dest_dir = output_dir if output_dir else (get_conversion_output_dir() or tempfile.gettempdir())
     os.makedirs(dest_dir, exist_ok=True)
 
     candidate = os.path.join(dest_dir, f"{stem}{out_ext}")
@@ -1619,6 +1672,14 @@ def clear_subtitle_tracks(timeline):
         return False
 
 def main():
+    # Handle conv-dir preference flags before anything else
+    argv = sys.argv[1:]
+    for flag in CONV_DIR_FLAGS:
+        if flag in argv:
+            idx = argv.index(flag)
+            value = argv[idx + 1] if idx + 1 < len(argv) else None
+            handle_conv_dir_flag(value)
+
     # Get files to process
     if len(sys.argv) > 1:
         entries, do_concat, do_export, do_import_only = parse_args(sys.argv[1:])
