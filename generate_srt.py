@@ -769,6 +769,22 @@ def convert_audio(source_path, fmt, output_dir=None):
     return candidate
 
 
+def ci_glob(pattern):
+    """Convert a glob pattern to a case-insensitive equivalent.
+
+    Each alphabetic character is replaced with a [aA]-style bracket expression
+    so that glob.glob matches regardless of case on case-sensitive filesystems.
+    e.g. "*.mp3" -> "*.[mM][pP][3]"  (digits pass through unchanged)
+    """
+    result = []
+    for ch in pattern:
+        if ch.isalpha():
+            result.append(f"[{ch.lower()}{ch.upper()}]")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
 def parse_args(argv):
     """Parse argv into entries and global flags.
 
@@ -831,7 +847,7 @@ def parse_args(argv):
         while i < len(argv) and not is_convert_flag(argv[i]):
             tok = argv[i]
             if '*' in tok or '?' in tok:
-                sources.extend(sorted(glob.glob(tok)))
+                sources.extend(sorted(glob.glob(ci_glob(tok))))
             else:
                 sources.append(tok)
             i += 1
