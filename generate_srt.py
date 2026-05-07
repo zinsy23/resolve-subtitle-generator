@@ -2,6 +2,7 @@
 import sys
 import os
 import glob
+import shutil
 import time
 import ctypes
 from ctypes import wintypes
@@ -15,6 +16,34 @@ import csv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
+# Supported conversion formats for the --<fmt> flags.
+# To add a new format, add it here — flags and usage messages are derived from this.
+SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aiff"}
+
+PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preferences.json")
+CONV_DIR_FLAGS = {"--conv-dir", "--conversion-dir", "--set-conv-dir", "--set-conversion-dir", "--temp-dir", "--tmp-dir"}
+
+# Video container extensions and the audio formats verified to work in each.
+# For video files, only the audio stream is transcoded; video is copied as-is.
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
+VIDEO_CONTAINER_AUDIO_COMPAT = {
+    ".mp4": {"mp3", "aac", "opus", "wav"},
+    ".mov": {"mp3", "aac", "wav"},
+    ".mkv": {"mp3", "aac", "wav", "flac", "opus"},
+    ".avi": {"mp3", "aac"},
+}
+
+# Maps audio format name to the ffmpeg codec to use
+AUDIO_FORMAT_CODEC = {
+    "mp3":  "libmp3lame",
+    "aac":  "aac",
+    "opus": "libopus",
+    "wav":  "pcm_s16le",
+    "flac": "flac",
+    "ogg":  "libvorbis",
+    "aiff": "pcm_s16le",
+}
 
 def find_module_locations(base_path):
     """Find possible locations of DaVinciResolveScript.py based on a base path.
@@ -672,6 +701,224 @@ def expand_file_args(args):
             expanded_files.append(arg)
     return expanded_files
 
+def load_preferences():
+    """Load preferences.json, returning an empty dict if it doesn't exist."""
+    if os.path.exists(PREFS_FILE):
+        try:
+            with open(PREFS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logging.warning(f"Failed to load preferences: {e}")
+    return {}
+
+def save_preferences(prefs):
+    """Save preferences dict to preferences.json, deleting the file if empty."""
+    try:
+        if prefs:
+            with open(PREFS_FILE, 'w') as f:
+                json.dump(prefs, f, indent=2)
+        elif os.path.exists(PREFS_FILE):
+            os.remove(PREFS_FILE)
+    except Exception as e:
+        logging.warning(f"Failed to save preferences: {e}")
+
+def handle_conv_dir_flag(value):
+    """Set or clear the conversion_output_dir preference and exit."""
+    if not value:
+        print("Usage: --conv-dir <path>  (set conversion output directory)")
+        print("       --conv-dir clear   (reset to system temp)")
+        print("       --conv-dir temp    (reset to system temp)")
+        sys.exit(0)
+
+    prefs = load_preferences()
+    if value.lower() in ("clear", "temp"):
+        if "conversion_output_dir" in prefs:
+            del prefs["conversion_output_dir"]
+            save_preferences(prefs)
+            print("Conversion output directory reset to system temp.")
+        else:
+            print("No conversion output directory was set (already using system temp).")
+    else:
+        abs_value = os.path.abspath(value)
+        prefs["conversion_output_dir"] = abs_value
+        save_preferences(prefs)
+        print(f"Conversion output directory set to: {abs_value}")
+    sys.exit(0)
+
+def get_conversion_output_dir():
+    """Return the preferred conversion output dir, or None to use system temp."""
+    prefs = load_preferences()
+    return prefs.get("conversion_output_dir", None)
+
+
+def check_ffmpeg():
+    """Return True if ffmpeg is available on PATH."""
+    return shutil.which("ffmpeg") is not None
+
+def convert_audio(source_path, fmt, output_dir=None):
+    """Convert source_path to the given format via ffmpeg.
+
+    For audio-only files: transcodes to the target format.
+    For video files: copies the video stream and transcodes only the audio,
+    keeping the same container extension.
+
+    If output_dir is None the OS temp directory is used.
+    Appends _1, _2, … to the stem if the destination already exists.
+    Returns the output path on success, or "FAILED" on error.
+    """
+    if not check_ffmpeg():
+        print("Error: ffmpeg was not found on your PATH.")
+        print("Install it using one of the following (these are common methods, not exhaustive):")
+        print("  Linux:   sudo apt install ffmpeg  (or your distro's package manager equivalent)")
+        print("  macOS:   brew install ffmpeg  (or https://ffmpeg.org/download.html)")
+        print("  Windows: winget install ffmpeg  (or https://ffmpeg.org/download.html)")
+        supported = ", ".join(f"--{fmt}" for fmt in sorted(SUPPORTED_CONVERSION_FORMATS))
+        print(f"Supported conversion flags: {supported}")
+        return "FAILED"
+
+    src_ext = os.path.splitext(source_path)[1].lower()
+    is_video = src_ext in VIDEO_EXTENSIONS
+
+    # For video files, validate the container+audio format combination
+    if is_video:
+        allowed = VIDEO_CONTAINER_AUDIO_COMPAT.get(src_ext, set())
+        if fmt not in allowed:
+            print(f"Error: '{fmt}' audio is not supported in {src_ext} containers.")
+            supported = ", ".join(f"--{f}" for f in sorted(allowed))
+            print(f"Supported formats for {src_ext}: {supported}")
+            return "FAILED"
+        # Video output keeps the same container extension
+        out_ext = src_ext
+    else:
+        out_ext = f".{fmt}"
+
+    codec = AUDIO_FORMAT_CODEC.get(fmt)
+    if not codec:
+        print(f"Error: No ffmpeg codec mapping found for format '{fmt}'.")
+        return "FAILED"
+
+    stem = os.path.splitext(os.path.basename(source_path))[0]
+    dest_dir = output_dir if output_dir else (get_conversion_output_dir() or tempfile.gettempdir())
+    os.makedirs(dest_dir, exist_ok=True)
+
+    candidate = os.path.join(dest_dir, f"{stem}{out_ext}")
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(dest_dir, f"{stem}_{counter}{out_ext}")
+        counter += 1
+
+    if is_video:
+        cmd = ["ffmpeg", "-i", source_path, "-c:v", "copy", "-c:a", codec, candidate, "-y"]
+    else:
+        cmd = ["ffmpeg", "-i", source_path, "-c:a", codec, candidate, "-y"]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logging.error(f"ffmpeg conversion failed: {result.stderr}")
+        print(f"Error: ffmpeg failed to convert {os.path.basename(source_path)}")
+        return "FAILED"
+
+    logging.info(f"Converted {source_path} -> {candidate}")
+    return candidate
+
+
+def ci_glob(pattern):
+    """Convert a glob pattern to a case-insensitive equivalent.
+
+    Each alphabetic character is replaced with a [aA]-style bracket expression
+    so that glob.glob matches regardless of case on case-sensitive filesystems.
+    e.g. "*.mp3" -> "*.[mM][pP][3]"  (digits pass through unchanged)
+    """
+    result = []
+    for ch in pattern:
+        if ch.isalpha():
+            result.append(f"[{ch.lower()}{ch.upper()}]")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def parse_args(argv):
+    """Parse argv into entries and global flags.
+
+    Returns:
+        entries   — list of (source_path, converted_path_or_None)
+        do_concat — True if --concat was present
+        do_export — True if --export was present
+
+    Per-file syntax:
+        <file> [--<fmt> [dest_dir]]
+
+    Global flags (position-independent):
+        --concat   import all files into one timeline
+        --export   write the SRT file (override for --concat which skips export by default)
+    """
+    AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
+    CONVERT_FLAGS = {f"--{fmt}" for fmt in SUPPORTED_CONVERSION_FORMATS}
+    GLOBAL_FLAGS = {"--concat", "--export", "--import"}
+
+    # Strip global flags first so they don't interfere with per-file parsing
+    argv_lower = [a.lower() for a in argv]
+    do_concat = "--concat" in argv_lower
+    do_export = "--export" in argv_lower
+    do_import_only = "--import" in argv_lower
+    argv = [a for a in argv if a.lower() not in GLOBAL_FLAGS]
+
+    def is_convert_flag(token):
+        """Return the format string if token is a supported --<fmt> flag, else None."""
+        return token[2:].lower() if token.lower() in CONVERT_FLAGS else None
+
+    def peek_flag(argv, i):
+        """Return (fmt, output_dir, new_i) if argv[i] is a conversion flag, else (None, None, i)."""
+        if i >= len(argv):
+            return None, None, i
+        fmt = is_convert_flag(argv[i])
+        if not fmt:
+            return None, None, i
+        i += 1
+        output_dir = None
+        if i < len(argv):
+            next_token = argv[i]
+            ext = os.path.splitext(next_token)[1].lower()
+            if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
+                output_dir = next_token
+                i += 1
+        return fmt, output_dir, i
+
+    entries = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+
+        # Skip a bare flag with no preceding file
+        if is_convert_flag(token):
+            i += 1
+            continue
+
+        # Collect a run of consecutive file tokens (no flag in between).
+        # This handles shell-expanded wildcards where the shell splits
+        # "*.m4a --wav" into individual filenames before Python sees them.
+        sources = []
+        while i < len(argv) and not is_convert_flag(argv[i]):
+            tok = argv[i]
+            if '*' in tok or '?' in tok:
+                sources.extend(sorted(glob.glob(ci_glob(tok))))
+            else:
+                sources.append(tok)
+            i += 1
+
+        # Check for an optional conversion flag after the file group
+        fmt, output_dir, i = peek_flag(argv, i)
+
+        for source in sources:
+            if fmt:
+                converted = convert_audio(source, fmt, output_dir)
+                entries.append((source, converted))
+            else:
+                entries.append((source, None))
+
+    return entries, do_concat, do_export, do_import_only
+
 def get_audio_duration(audio_file):
     """Get the duration of an audio file in seconds."""
     try:
@@ -1207,113 +1454,153 @@ def get_current_project():
         logging.error(f"Error getting current project: {str(e)}")
         return None
 
-def generate_srt_for_file(audio_file):
-    """Generate SRT file for a given audio file."""
+def build_timeline(project, media_pool, import_paths, timeline_name):
+    """Import all files and create a timeline with all clips in order.
+
+    Works for both single-file and concat cases — a single file is just a
+    list of one.
+    """
     try:
-        logging.info(f"Starting SRT generation for: {audio_file}")
-        
-        # Get output path
-        output_path = os.path.splitext(audio_file)[0] + ".srt"
-        logging.info(f"Output SRT will be saved to: {output_path}")
-        
-        # Get Resolve object
-        logging.info("Getting Resolve object...")
+        root_folder = media_pool.GetRootFolder()
+        if not root_folder:
+            logging.error("Failed to get root folder")
+            return None
+
+        media_items = []
+        for path in import_paths:
+            abs_path = os.path.abspath(os.path.normpath(path))
+            logging.info(f"Importing: {abs_path}")
+            items = media_pool.ImportMedia([abs_path])
+            if not items:
+                logging.error(f"Failed to import {abs_path}")
+                return None
+            if not verify_media_import(media_pool, items, abs_path):
+                logging.error(f"Media import verification failed for {abs_path}")
+                return None
+            media_items.append(items[0])
+
+        logging.info(f"Creating timeline '{timeline_name}' with {len(media_items)} clip(s)...")
+        timeline = media_pool.CreateTimelineFromClips(timeline_name, media_items)
+        if not timeline:
+            logging.error("Failed to create timeline")
+            return None
+
+        project.SetCurrentTimeline(timeline)
+        time.sleep(2)
+
+        current_timeline = project.GetCurrentTimeline()
+        if not current_timeline or current_timeline.GetName() != timeline_name:
+            logging.error("Failed to set timeline as current")
+            return None
+
+        items = current_timeline.GetItemListInTrack("audio", 1)
+        if not items:
+            logging.error("No media found in timeline after creation")
+            return None
+
+        logging.info("Successfully created timeline")
+        return current_timeline
+    except Exception as e:
+        logging.error(f"Error in build_timeline: {str(e)}")
+        return None
+
+
+def generate_srt(import_paths, timeline_name, srt_output_path, do_export=True, do_import_only=False):
+    """Core pipeline: import files, build timeline, optionally generate subtitles and export SRT.
+
+    import_paths    — list of file paths to import (one for normal, many for concat)
+    timeline_name   — name to give the timeline in Resolve
+    srt_output_path — where to write the SRT file (used only when do_export=True)
+    do_export       — write the SRT file when True; skip when False (concat default)
+    do_import_only  — stop after importing into timeline, skip subtitle generation entirely
+    """
+    try:
+        logging.info(f"Starting {'import' if do_import_only else 'SRT generation'} for: {import_paths}")
+        if do_export and not do_import_only:
+            logging.info(f"Output SRT will be saved to: {srt_output_path}")
+
         resolve = get_resolve()
         if not resolve:
             logging.error("Failed to get Resolve object")
             return False
-            
-        # Get current project
-        logging.info("Getting current project...")
+
         project = get_current_project()
         if not project:
             logging.error("No project is open. Please open a project first.")
             return False
-            
-        # Get media pool
-        logging.info("Getting media pool...")
-        mediaPool = project.GetMediaPool()
-        if not mediaPool:
+
+        media_pool = project.GetMediaPool()
+        if not media_pool:
             logging.error("Failed to get media pool")
             return False
-            
-        # Get root folder
-        logging.info("Getting root folder...")
-        rootFolder = mediaPool.GetRootFolder()
-        if not rootFolder:
-            logging.error("Failed to get root folder")
-            return False
-            
-        # Import audio file
-        logging.info("Importing audio file...")
-        if not import_audio_file(mediaPool, rootFolder, audio_file):
-            logging.error("Failed to import audio file")
-            return False
-            
-        # Create timeline with media
-        logging.info("Creating timeline with media...")
-        timeline = create_timeline_with_media(project, mediaPool, os.path.basename(audio_file))
+
+        timeline = build_timeline(project, media_pool, import_paths, timeline_name)
         if not timeline:
-            logging.error("Failed to create timeline")
+            logging.error("Failed to build timeline")
             return False
-            
-        # Verify project state
-        logging.info("Verifying project state...")
+
         if not verify_project_state(project, timeline):
             logging.error("Project state verification failed")
             return False
-            
-        # Clear existing subtitle tracks
-        logging.info("Clearing existing subtitle tracks...")
+
+        if do_import_only:
+            logging.info("Import complete (subtitle generation skipped)")
+            return True
+
         if not clear_subtitle_tracks(timeline):
             logging.error("Failed to clear subtitle tracks")
             return False
-            
-        # Setup timeline tracks
-        logging.info("Setting up timeline tracks...")
+
         if not setup_timeline_tracks(timeline):
             logging.error("Failed to setup timeline tracks")
             return False
-            
-        # Generate subtitles
-        logging.info("Generating subtitles...")
+
         if not create_subtitles_from_audio(timeline):
             logging.error("Failed to generate subtitles")
             return False
-            
-        # Wait for subtitle generation
-        logging.info("Waiting for subtitle generation (max 30 attempts)...")
+
         if not wait_for_subtitles(timeline):
-            logging.error("Failed to generate subtitles")
+            logging.error("Timed out waiting for subtitles")
             return False
-            
-        # Verify timeline is still valid
+
         if not verify_timeline(timeline):
-            logging.error("Timeline is no longer valid after generating subtitles")
+            logging.error("Timeline no longer valid after subtitle generation")
             return False
-            
-        # Get subtitle items
+
+        if not do_export:
+            logging.info("Subtitles generated in Resolve (export skipped)")
+            return True
+
         subtitle_items = get_subtitle_items(timeline)
         if not subtitle_items:
             logging.error("Failed to get subtitle items")
             return False
-            
-        # Get timeline framerate
+
         fps = get_timeline_framerate(timeline)
         logging.info(f"Using framerate: {fps} fps")
-            
-        # Write SRT file
-        logging.info(f"Writing SRT to: {output_path}")
-        if not write_srt_file(output_path, subtitle_items, fps):
+
+        logging.info(f"Writing SRT to: {srt_output_path}")
+        if not write_srt_file(srt_output_path, subtitle_items, fps):
             logging.error("Failed to write SRT file")
             return False
-            
-        logging.info(f"Successfully wrote SRT file to {output_path}")
+
+        logging.info(f"Successfully wrote SRT file to {srt_output_path}")
         return True
-        
+
     except Exception as e:
-        logging.error(f"Error in generate_srt_for_file: {str(e)}")
+        logging.error(f"Error in generate_srt: {str(e)}")
         return False
+
+
+def generate_srt_for_file(audio_file, srt_output_path=None):
+    """Thin wrapper around generate_srt for single-file callers."""
+    output_path = srt_output_path if srt_output_path else os.path.splitext(audio_file)[0] + ".srt"
+    return generate_srt(
+        import_paths=[audio_file],
+        timeline_name=os.path.basename(audio_file),
+        srt_output_path=output_path,
+        do_export=True,
+    )
 
 def verify_project_state(project, timeline):
     """Verify that the project and timeline are in a valid state."""
@@ -1386,68 +1673,105 @@ def clear_subtitle_tracks(timeline):
         return False
 
 def main():
+    # Handle conv-dir preference flags before anything else
+    argv = sys.argv[1:]
+    argv_lower = [a.lower() for a in argv]
+    for flag in CONV_DIR_FLAGS:
+        if flag in argv_lower:
+            idx = argv_lower.index(flag)
+            value = argv[idx + 1] if idx + 1 < len(argv) else None
+            handle_conv_dir_flag(value)
+
     # Get files to process
     if len(sys.argv) > 1:
-        # Process files provided as arguments
-        files_to_process = []
-        for arg in sys.argv[1:]:
-            if '*' in arg or '?' in arg:
-                # Expand wildcards
-                files_to_process.extend(glob.glob(arg))
-            else:
-                files_to_process.append(arg)
+        entries, do_concat, do_export, do_import_only = parse_args(sys.argv[1:])
     else:
-        # Process all MP3 files in samples directory
         samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
-        files_to_process = [os.path.join(samples_dir, f) for f in os.listdir(samples_dir) if f.endswith('.MP3')]
-    
-    if not files_to_process:
+        entries = [
+            (os.path.join(samples_dir, f), None)
+            for f in os.listdir(samples_dir) if f.lower().endswith('.mp3')
+        ]
+        do_concat = False
+        do_export = False
+        do_import_only = False
+
+    if not entries:
         print("No files to process")
         return
-    
-    # Get initial Resolve setup
-    try:
-        resolve = get_resolve()
-        if not resolve:
-            print("Failed to get Resolve object")
-            return
-            
-        project = get_current_project()
-        if not project:
-            print("No project is currently open. Please open a project first.")
-            return
-            
-        media_pool = project.GetMediaPool()
-        if not media_pool:
-            print("Failed to get media pool")
-            return
-            
-        root_folder = media_pool.GetRootFolder()
-        if not root_folder:
-            print("Failed to get root folder")
-            return
-    except Exception as e:
-        print(f"Error setting up Resolve: {str(e)}")
-        return
-    
-    # Process each file sequentially
-    successful = 0
-    for file_path in files_to_process:
-        try:
-            print(f"\nProcessing {os.path.basename(file_path)}...")
-            
-            # Generate SRT
-            if generate_srt_for_file(file_path):
-                successful += 1
-                print(f"Successfully generated SRT for {os.path.basename(file_path)}")
-            else:
-                print(f"Failed to generate SRT for {os.path.basename(file_path)}")
-                
-        except Exception as e:
-            print(f"Error processing {os.path.basename(file_path)}: {str(e)}")
+
+    # Drop entries where conversion failed or source not found
+    valid_entries = []
+    for src, conv in entries:
+        if conv is None and not os.path.exists(src):
+            print(f"File not found, skipping: {src}")
             continue
-    
-    print(f"\nProcessed {len(files_to_process)} file(s), {successful} successful")
+        if conv == "FAILED":
+            continue
+        valid_entries.append((src, conv))
+
+    if not valid_entries:
+        print("No valid files to process")
+        return
+
+    if do_concat:
+        import_paths = [conv if conv else src for src, conv in valid_entries]
+        first_src = valid_entries[0][0]
+        timeline_name = os.path.basename(first_src)
+        srt_path = os.path.splitext(first_src)[0] + ".srt"
+        export = do_export and not do_import_only
+
+        names = ", ".join(os.path.basename(s) for s, _ in valid_entries)
+        print(f"\nConcat mode: building one timeline from {len(valid_entries)} file(s): {names}")
+        if do_import_only:
+            print("  Import only — subtitle generation skipped")
+        elif export:
+            print(f"  SRT will be exported to: {srt_path}")
+        else:
+            print("  Subtitles will be generated in Resolve only (use --export to save SRT)")
+
+        if generate_srt(import_paths, timeline_name, srt_path, do_export=export, do_import_only=do_import_only):
+            print(f"Successfully {'imported' if do_import_only else 'generated subtitles for'} concat timeline '{timeline_name}'")
+            if export:
+                print(f"SRT saved to: {srt_path}")
+        else:
+            print("Failed to process concat timeline")
+        return
+
+    # Normal per-file processing
+    successful = 0
+    for src, conv in valid_entries:
+        import_path = conv if conv else src
+        try:
+            print(f"\nProcessing {os.path.basename(src)}...")
+            if conv:
+                print(f"  Using converted file: {conv}")
+
+            if do_import_only:
+                if generate_srt(
+                    [import_path],
+                    os.path.basename(import_path),
+                    srt_output_path=None,
+                    do_export=False,
+                    do_import_only=True,
+                ):
+                    successful += 1
+                    print(f"Successfully imported {os.path.basename(src)}")
+                else:
+                    print(f"Failed to import {os.path.basename(src)}")
+            else:
+                srt_path = os.path.splitext(src)[0] + ".srt"
+                if generate_srt_for_file(import_path, srt_output_path=srt_path):
+                    successful += 1
+                    print(f"Successfully generated SRT for {os.path.basename(src)}")
+                else:
+                    print(f"Failed to generate SRT for {os.path.basename(src)}")
+
+        except Exception as e:
+            print(f"Error processing {os.path.basename(src)}: {str(e)}")
+            continue
+
+    action = "imported" if do_import_only else "processed"
+    print(f"\n{successful}/{len(valid_entries)} file(s) {action} successfully")
 
 if __name__ == "__main__":
     main() 
