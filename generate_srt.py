@@ -802,11 +802,12 @@ def parse_args(argv):
     """
     AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
     CONVERT_FLAGS = {f"--{fmt}" for fmt in SUPPORTED_CONVERSION_FORMATS}
-    GLOBAL_FLAGS = {"--concat", "--export"}
+    GLOBAL_FLAGS = {"--concat", "--export", "--import"}
 
     # Strip global flags first so they don't interfere with per-file parsing
     do_concat = "--concat" in argv
     do_export = "--export" in argv
+    do_import_only = "--import" in argv
     argv = [a for a in argv if a not in GLOBAL_FLAGS]
 
     def is_convert_flag(token):
@@ -862,7 +863,7 @@ def parse_args(argv):
             else:
                 entries.append((source, None))
 
-    return entries, do_concat, do_export
+    return entries, do_concat, do_export, do_import_only
 
 def get_audio_duration(audio_file):
     """Get the duration of an audio file in seconds."""
@@ -1450,17 +1451,18 @@ def build_timeline(project, media_pool, import_paths, timeline_name):
         return None
 
 
-def generate_srt(import_paths, timeline_name, srt_output_path, do_export=True):
-    """Core pipeline: import files, build timeline, generate subtitles, optionally export SRT.
+def generate_srt(import_paths, timeline_name, srt_output_path, do_export=True, do_import_only=False):
+    """Core pipeline: import files, build timeline, optionally generate subtitles and export SRT.
 
-    import_paths   — list of file paths to import (one for normal, many for concat)
-    timeline_name  — name to give the timeline in Resolve
+    import_paths    — list of file paths to import (one for normal, many for concat)
+    timeline_name   — name to give the timeline in Resolve
     srt_output_path — where to write the SRT file (used only when do_export=True)
-    do_export      — write the SRT file when True; skip when False (concat default)
+    do_export       — write the SRT file when True; skip when False (concat default)
+    do_import_only  — stop after importing into timeline, skip subtitle generation entirely
     """
     try:
-        logging.info(f"Starting SRT generation for: {import_paths}")
-        if do_export:
+        logging.info(f"Starting {'import' if do_import_only else 'SRT generation'} for: {import_paths}")
+        if do_export and not do_import_only:
             logging.info(f"Output SRT will be saved to: {srt_output_path}")
 
         resolve = get_resolve()
@@ -1486,6 +1488,10 @@ def generate_srt(import_paths, timeline_name, srt_output_path, do_export=True):
         if not verify_project_state(project, timeline):
             logging.error("Project state verification failed")
             return False
+
+        if do_import_only:
+            logging.info("Import complete (subtitle generation skipped)")
+            return True
 
         if not clear_subtitle_tracks(timeline):
             logging.error("Failed to clear subtitle tracks")
@@ -1615,7 +1621,7 @@ def clear_subtitle_tracks(timeline):
 def main():
     # Get files to process
     if len(sys.argv) > 1:
-        entries, do_concat, do_export = parse_args(sys.argv[1:])
+        entries, do_concat, do_export, do_import_only = parse_args(sys.argv[1:])
     else:
         samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
         entries = [
@@ -1624,6 +1630,7 @@ def main():
         ]
         do_concat = False
         do_export = False
+        do_import_only = False
 
     if not entries:
         print("No files to process")
@@ -1644,26 +1651,27 @@ def main():
         return
 
     if do_concat:
-        # All files go into one timeline; subtitles generated once across the whole thing
         import_paths = [conv if conv else src for src, conv in valid_entries]
         first_src = valid_entries[0][0]
         timeline_name = os.path.basename(first_src)
         srt_path = os.path.splitext(first_src)[0] + ".srt"
-        export = do_export  # off by default for concat unless --export given
+        export = do_export and not do_import_only
 
         names = ", ".join(os.path.basename(s) for s, _ in valid_entries)
         print(f"\nConcat mode: building one timeline from {len(valid_entries)} file(s): {names}")
-        if export:
+        if do_import_only:
+            print("  Import only — subtitle generation skipped")
+        elif export:
             print(f"  SRT will be exported to: {srt_path}")
         else:
             print("  Subtitles will be generated in Resolve only (use --export to save SRT)")
 
-        if generate_srt(import_paths, timeline_name, srt_path, do_export=export):
-            print(f"Successfully generated subtitles for concat timeline '{timeline_name}'")
+        if generate_srt(import_paths, timeline_name, srt_path, do_export=export, do_import_only=do_import_only):
+            print(f"Successfully {'imported' if do_import_only else 'generated subtitles for'} concat timeline '{timeline_name}'")
             if export:
                 print(f"SRT saved to: {srt_path}")
         else:
-            print("Failed to generate subtitles for concat timeline")
+            print("Failed to process concat timeline")
         return
 
     # Normal per-file processing
@@ -1675,18 +1683,32 @@ def main():
             if conv:
                 print(f"  Using converted file: {conv}")
 
-            srt_path = os.path.splitext(src)[0] + ".srt"
-            if generate_srt_for_file(import_path, srt_output_path=srt_path):
-                successful += 1
-                print(f"Successfully generated SRT for {os.path.basename(src)}")
+            if do_import_only:
+                if generate_srt(
+                    [import_path],
+                    os.path.basename(import_path),
+                    srt_output_path=None,
+                    do_export=False,
+                    do_import_only=True,
+                ):
+                    successful += 1
+                    print(f"Successfully imported {os.path.basename(src)}")
+                else:
+                    print(f"Failed to import {os.path.basename(src)}")
             else:
-                print(f"Failed to generate SRT for {os.path.basename(src)}")
+                srt_path = os.path.splitext(src)[0] + ".srt"
+                if generate_srt_for_file(import_path, srt_output_path=srt_path):
+                    successful += 1
+                    print(f"Successfully generated SRT for {os.path.basename(src)}")
+                else:
+                    print(f"Failed to generate SRT for {os.path.basename(src)}")
 
         except Exception as e:
             print(f"Error processing {os.path.basename(src)}: {str(e)}")
             continue
 
-    print(f"\nProcessed {len(valid_entries)} file(s), {successful} successful")
+    action = "imported" if do_import_only else "processed"
+    print(f"\n{successful}/{len(valid_entries)} file(s) {action} successfully")
 
 if __name__ == "__main__":
     main() 
