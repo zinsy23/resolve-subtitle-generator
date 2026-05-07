@@ -134,7 +134,7 @@ python generate_srt.py "samples/*.m4a" --mp3
 # Mix converted and non-converted files in one command
 python generate_srt.py "episode1.m4a" --wav "episode2.wav" "episode3.m4a" --mp3
 
-# Convert audio track in a video file (video stream is preserved, only audio is transcoded)
+# Convert audio track in a video file (e.g. AAC in MP4 unsupported on Linux — video stream is preserved, only audio is transcoded)
 python generate_srt.py "recording.mp4" --mp3
 ```
 
@@ -170,6 +170,55 @@ ffmpeg is required for conversion flags. If it's not installed, the script will 
 - **Linux:** `sudo apt install ffmpeg` (or your distro's package manager equivalent)
 - **macOS:** `brew install ffmpeg` (or https://ffmpeg.org/download.html)
 - **Windows:** `winget install ffmpeg` (or https://ffmpeg.org/download.html)
+
+### Setting a default conversion output directory
+
+By default, converted files go to the system temp directory and are cleaned up on reboot. To always save conversions to a specific location instead, set a preference:
+
+```bash
+# Set a default conversion output directory (all aliases do the same thing)
+python generate_srt.py --conv-dir "/my/output/path"
+python generate_srt.py --conversion-dir "/my/output/path"
+python generate_srt.py --set-conv-dir "/my/output/path"
+python generate_srt.py --set-conversion-dir "/my/output/path"
+python generate_srt.py --temp-dir "/my/output/path"
+python generate_srt.py --tmp-dir "/my/output/path"
+
+# Reset back to system temp
+python generate_srt.py --conv-dir clear
+python generate_srt.py --conv-dir temp
+```
+
+Once set, all conversions save to that directory automatically — no need to specify a path per-file. A per-file explicit path (e.g. `"episode.m4a" --wav "/some/path"`) still overrides the preference for that call. The preference is stored in `preferences.json` next to the script and only created when a non-default value is set. Relative paths are resolved to absolute at set time so the preference works correctly regardless of where you run the command from.
+
+## Global Flags
+
+These flags apply to the whole command rather than individual files and can be placed anywhere in the argument list.
+
+| Flag | Description |
+|------|-------------|
+| `--concat` | Import all files into a single timeline instead of separate ones. Subtitles are generated across the entire timeline. Does not export an SRT by default — use with `--export` to save one. |
+| `--export` | Write the SRT file. Redundant for normal per-file use (always exports), but required to export when using `--concat`. |
+| `--import` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
+
+### Examples
+
+```bash
+# Import all M4A files into one timeline, generate subtitles in Resolve only (no SRT file)
+python generate_srt.py "*.m4a" --wav --concat
+
+# Same but also export the SRT next to the first file
+python generate_srt.py "*.m4a" --wav --concat --export
+
+# Generate subtitles in Resolve for a single file without exporting an SRT
+python generate_srt.py "episode.m4a" --concat
+
+# Convert AAC audio in an MP4 to MP3 and import into Resolve without generating subtitles
+python generate_srt.py "recording.mp4" --mp3 --import
+
+# Same but for multiple MP4s, all into one timeline
+python generate_srt.py "*.mp4" --mp3 --import --concat
+```
 
 ## Troubleshooting
 
