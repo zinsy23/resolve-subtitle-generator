@@ -17,6 +17,17 @@ import csv
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+# --verbose / -v enables the noisy Resolve path-validation diagnostics; quiet by default.
+VERBOSE_FLAGS = {"--verbose", "-v"}
+VERBOSE = bool(VERBOSE_FLAGS & {a.lower() for a in sys.argv})
+if not VERBOSE:
+    logging.getLogger().setLevel(logging.WARNING)
+
+def vprint(*args, **kwargs):
+    """print() gated behind --verbose, for setup diagnostics that are noise on a working install."""
+    if VERBOSE:
+        print(*args, **kwargs)
+
 # Supported conversion formats for the --<fmt> flags.
 # To add a new format, add it here — flags and usage messages are derived from this.
 SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aiff"}
@@ -74,19 +85,19 @@ def validate_resolve_paths():
     config = {}
     modified = False
     
-    print("\n=== Starting path validation ===")
-    print("Checking for required files...")
+    vprint("\n=== Starting path validation ===")
+    vprint("Checking for required files...")
     
     # Load saved paths if available
     if os.path.exists(config_file):
         try:
             with open(config_file, 'r') as f:
                 config = json.load(f)
-                print(f"Loaded config from: {config_file}")
+                vprint(f"Loaded config from: {config_file}")
                 if "RESOLVE_SCRIPT_API" in config:
-                    print(f"  Config API path: {config['RESOLVE_SCRIPT_API']}")
+                    vprint(f"  Config API path: {config['RESOLVE_SCRIPT_API']}")
                 if "RESOLVE_SCRIPT_LIB" in config:
-                    print(f"  Config LIB path: {config['RESOLVE_SCRIPT_LIB']}")
+                    vprint(f"  Config LIB path: {config['RESOLVE_SCRIPT_LIB']}")
         except Exception as e:
             logging.warning(f"Failed to load config file: {str(e)}")
     
@@ -110,44 +121,44 @@ def validate_resolve_paths():
     else:
         default_lib_path = ""
     
-    print(f"Default API path: {default_api_path}")
-    print(f"Default LIB path: {default_lib_path}")
+    vprint(f"Default API path: {default_api_path}")
+    vprint(f"Default LIB path: {default_lib_path}")
     
     # Check if default paths are valid
     default_module_paths = find_module_locations(default_api_path)
     default_api_valid = len(default_module_paths["module_paths"]) > 0
     default_lib_valid = os.path.isfile(default_lib_path)
     
-    print(f"Default module file exists: {default_api_valid}")
-    print(f"Default library file exists: {default_lib_valid}")
+    vprint(f"Default module file exists: {default_api_valid}")
+    vprint(f"Default library file exists: {default_lib_valid}")
     
     # Set initial API path from config or env
     api_path = None
     if "RESOLVE_SCRIPT_API" in config:
         api_path = config["RESOLVE_SCRIPT_API"]
         os.environ["RESOLVE_SCRIPT_API"] = api_path
-        print(f"Using API path from config: {api_path}")
+        vprint(f"Using API path from config: {api_path}")
     elif os.getenv("RESOLVE_SCRIPT_API"):
         api_path = os.getenv("RESOLVE_SCRIPT_API")
-        print(f"Using existing API path from env: {api_path}")
+        vprint(f"Using existing API path from env: {api_path}")
     else:
         api_path = default_api_path
         os.environ["RESOLVE_SCRIPT_API"] = api_path
-        print(f"Using default API path: {api_path}")
+        vprint(f"Using default API path: {api_path}")
         
     # Set initial LIB path from config or env
     lib_path = None
     if "RESOLVE_SCRIPT_LIB" in config:
         lib_path = config["RESOLVE_SCRIPT_LIB"]
         os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
-        print(f"Using LIB path from config: {lib_path}")
+        vprint(f"Using LIB path from config: {lib_path}")
     elif os.getenv("RESOLVE_SCRIPT_LIB"):
         lib_path = os.getenv("RESOLVE_SCRIPT_LIB")
-        print(f"Using existing LIB path from env: {lib_path}")
+        vprint(f"Using existing LIB path from env: {lib_path}")
     else:
         lib_path = default_lib_path
         os.environ["RESOLVE_SCRIPT_LIB"] = lib_path
-        print(f"Using default LIB path: {lib_path}")
+        vprint(f"Using default LIB path: {lib_path}")
     
     # Force prompt option for debugging - set to False in production
     force_module_prompt = False
@@ -157,9 +168,9 @@ def validate_resolve_paths():
     module_exists = len(module_info["module_paths"]) > 0
     
     # Print all found locations
-    print("Checking possible module locations:")
+    vprint("Checking possible module locations:")
     for path in module_info["module_paths"]:
-        print(f"  - {path}: Found")
+        vprint(f"  - {path}: Found")
     
     # If module doesn't exist at any checked location or we're forcing the prompt
     if not module_exists or force_module_prompt:
@@ -291,7 +302,7 @@ def validate_resolve_paths():
     
     # Check if library file exists
     lib_file_exists = os.path.isfile(lib_path)
-    print(f"Library exists at {lib_path}: {lib_file_exists}")
+    vprint(f"Library exists at {lib_path}: {lib_file_exists}")
     
     if not lib_file_exists:
         print("\n==================================================")
@@ -409,23 +420,23 @@ def test_resolve_import_in_subprocess():
     module_files = module_info["module_paths"]
     
     # Print found paths for debugging
-    print("Found module locations:")
+    vprint("Found module locations:")
     for path in module_files:
-        print(f"  - {path}")
-    
+        vprint(f"  - {path}")
+
     # Add the API path itself and its parent to search paths
     search_paths = []
     if os.path.exists(api_path):
         search_paths.append(api_path)
     if os.path.exists(os.path.dirname(api_path)):
         search_paths.append(os.path.dirname(api_path))
-        
+
     # Add module locations to search paths
     for loc in module_locations:
         if loc not in search_paths and os.path.exists(loc):
             search_paths.append(loc)
-    
-    print(f"Search paths to be used: {search_paths}")
+
+    vprint(f"Search paths to be used: {search_paths}")
     
     # Create a temporary Python file with the import test
     with tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w') as f:
@@ -855,13 +866,14 @@ def parse_args(argv):
     """
     AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
     CONVERT_FLAGS = {f"--{fmt}" for fmt in SUPPORTED_CONVERSION_FORMATS}
-    GLOBAL_FLAGS = {"--concat", "--export", "--import"}
+    FLAG_CONCAT, FLAG_EXPORT, FLAG_IMPORT = "--concat", "--export", "--import"
+    GLOBAL_FLAGS = {FLAG_CONCAT, FLAG_EXPORT, FLAG_IMPORT} | VERBOSE_FLAGS
 
     # Strip global flags first so they don't interfere with per-file parsing
     argv_lower = [a.lower() for a in argv]
-    do_concat = "--concat" in argv_lower
-    do_export = "--export" in argv_lower
-    do_import_only = "--import" in argv_lower
+    do_concat = FLAG_CONCAT in argv_lower
+    do_export = FLAG_EXPORT in argv_lower
+    do_import_only = FLAG_IMPORT in argv_lower
     argv = [a for a in argv if a.lower() not in GLOBAL_FLAGS]
 
     def is_convert_flag(token):
@@ -895,12 +907,20 @@ def parse_args(argv):
             i += 1
             continue
 
+        # Any other unrecognized --flag is an error, not a filename — never
+        # silently swallow a typo'd or unknown flag into the file list.
+        if token.startswith('--') and token.lower() not in CONVERT_FLAGS:
+            print(f"Error: Unrecognized flag '{token}'")
+            sys.exit(1)
+
         # Collect a run of consecutive file tokens (no flag in between).
         # This handles shell-expanded wildcards where the shell splits
         # "*.m4a --wav" into individual filenames before Python sees them.
         sources = []
         while i < len(argv) and not is_convert_flag(argv[i]):
             tok = argv[i]
+            if tok.startswith('--') and tok.lower() not in CONVERT_FLAGS:
+                break
             if '*' in tok or '?' in tok:
                 sources.extend(sorted(glob.glob(ci_glob(tok))))
             else:
@@ -1717,6 +1737,12 @@ def main():
             handle_conv_dir_flag(value)
 
     if "--list" in argv_lower:
+        allowed = {"--list"} | VERBOSE_FLAGS
+        extra = [a for a in argv if a.lower() not in allowed]
+        if extra:
+            print("Error: --list must be used standalone (only --verbose/-v may accompany it).")
+            print(f"  Unexpected argument(s): {' '.join(extra)}")
+            sys.exit(1)
         handle_list_flag()
 
     # Get files to process

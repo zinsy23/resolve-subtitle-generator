@@ -200,7 +200,8 @@ These flags apply to the whole command rather than individual files and can be p
 | `--concat` | Import all files into a single timeline instead of separate ones. Subtitles are generated across the entire timeline. Does not export an SRT by default — use with `--export` to save one. |
 | `--export` | Write the SRT file. Redundant for normal per-file use (always exports), but required to export when using `--concat`. |
 | `--import` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
-| `--list` | List the timelines in the currently open project, then exit. No files are processed. |
+| `--list` | List the timelines in the currently open project, then exit. Must be used standalone — only `--verbose`/`-v` may accompany it; any file or other flag is rejected with an error. |
+| `--verbose` / `-v` | Show verbose Resolve path-validation and setup diagnostics. Quiet by default. |
 
 ### Examples
 
