@@ -24,6 +24,8 @@ python generate_srt.py "audio1.mp3" "audio2.mp3" "audio3.mp3"
 python generate_srt.py "samples/*.m4a"
 ```
 
+Running the script with no arguments at all prints a usage summary (global flags, shorthand, conversion formats, examples) and exits without touching Resolve.
+
 The script will:
 1. Create a timeline for each file
 2. Generate subtitles using Resolve's auto-captioning

@@ -1552,6 +1552,46 @@ def handle_list_flag():
     sys.exit(0)
 
 
+GLOBAL_FLAG_DESCRIPTIONS = {
+    "c": "Import all files into a single timeline instead of separate ones.",
+    "e": "Write the SRT file (required to export when using --concat).",
+    "i": "Import into Resolve without generating subtitles.",
+    "l": "List timelines in the currently open project, then exit. Must be standalone.",
+    "v": "Show verbose Resolve path-validation and setup diagnostics.",
+}
+
+
+def print_usage():
+    """Print a usage summary. Shown when the script is run with no arguments."""
+    global_flag_lines = "\n".join(
+        f"  {SHORT_FLAG_MAP[letter]:<12} -{letter:<3} {desc}"
+        for letter, desc in GLOBAL_FLAG_DESCRIPTIONS.items()
+    )
+    conv_formats = ", ".join(f"--{fmt}" for fmt in sorted(SUPPORTED_CONVERSION_FORMATS))
+
+    print("Resolve Subtitle Generator")
+    print()
+    print("Usage:")
+    print("  python generate_srt.py <file> [file2 ...] [flags]")
+    print()
+    print("Global flags (position-independent, shorthand may be bundled, e.g. -cv):")
+    print(global_flag_lines)
+    print()
+    print(f"Conversion format flags (convert a file before importing): {conv_formats}")
+    print("  Usage: <file> --<fmt> [output_dir]")
+    print()
+    print("Conversion output directory preference:")
+    print(f"  {' / '.join(sorted(CONV_DIR_FLAGS))} <path>")
+    print("  (pass 'clear' or 'temp' as the path to reset to system temp)")
+    print()
+    print("Examples:")
+    print('  python generate_srt.py "episode.m4a"')
+    print('  python generate_srt.py "*.m4a" --wav --concat --export')
+    print('  python generate_srt.py -l')
+    print()
+    print("See README.md for full documentation.")
+
+
 def build_timeline(project, media_pool, import_paths, timeline_name):
     """Import all files and create a timeline with all clips in order.
 
@@ -1793,14 +1833,8 @@ def main():
     if len(sys.argv) > 1:
         entries, do_concat, do_export, do_import_only = parse_args(sys.argv[1:])
     else:
-        samples_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
-        entries = [
-            (os.path.join(samples_dir, f), None)
-            for f in os.listdir(samples_dir) if f.lower().endswith('.mp3')
-        ]
-        do_concat = False
-        do_export = False
-        do_import_only = False
+        print_usage()
+        sys.exit(0)
 
     if not entries:
         print("No files to process")

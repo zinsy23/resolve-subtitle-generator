@@ -183,3 +183,37 @@ class TestShorthandFlags:
         # A --long flag must never be run through single-letter expansion.
         result = run(["--list", "--verbose"])
         assert "Unrecognized flag" not in result.stdout
+
+
+class TestNoArgsUsage:
+    def test_no_args_does_not_crash(self):
+        result = run([])
+        assert result.returncode == 0
+        assert "Traceback" not in result.stderr
+
+    def test_no_args_prints_usage(self):
+        result = run([])
+        assert "Usage:" in result.stdout
+
+    def test_no_args_usage_lists_all_global_flags(self):
+        result = run([])
+        for flag in ("--concat", "--export", "--import", "--list", "--verbose"):
+            assert flag in result.stdout
+
+    def test_no_args_usage_lists_all_shorthand_letters(self):
+        result = run([])
+        for letter in ("-c", "-e", "-i", "-l", "-v"):
+            assert letter in result.stdout
+
+    def test_no_args_usage_lists_conversion_formats(self):
+        result = run([])
+        for fmt_flag in ("--wav", "--mp3", "--flac", "--aac", "--ogg", "--opus", "--aiff"):
+            assert fmt_flag in result.stdout
+
+    def test_no_args_usage_lists_conv_dir_flag(self):
+        result = run([])
+        assert "--conv-dir" in result.stdout
+
+    def test_with_args_does_not_print_usage(self):
+        result = run(["nonexistent.m4a"])
+        assert "Usage:" not in result.stdout
