@@ -24,6 +24,10 @@ SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aif
 PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preferences.json")
 CONV_DIR_FLAGS = {"--conv-dir", "--conversion-dir", "--set-conv-dir", "--set-conversion-dir", "--temp-dir", "--tmp-dir"}
 
+# Default loudnorm targets: as loud as a typical heavily-mastered MP3 but just under clipping.
+DEFAULT_LUFS_TARGET = -10.0
+DEFAULT_TRUE_PEAK = -1.0
+
 # Video container extensions and the audio formats verified to work in each.
 # For video files, only the audio stream is transcoded; video is copied as-is.
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi"}
@@ -755,7 +759,7 @@ def check_ffmpeg():
     """Return True if ffmpeg is available on PATH."""
     return shutil.which("ffmpeg") is not None
 
-def convert_audio(source_path, fmt, output_dir=None):
+def convert_audio(source_path, fmt, output_dir=None, normalize=None):
     """Convert source_path to the given format via ffmpeg.
 
     For audio-only files: transcodes to the target format.
@@ -763,6 +767,7 @@ def convert_audio(source_path, fmt, output_dir=None):
     keeping the same container extension.
 
     If output_dir is None the OS temp directory is used.
+    If normalize is a float, applies loudnorm to that LUFS target (true peak capped at DEFAULT_TRUE_PEAK).
     Appends _1, _2, … to the stem if the destination already exists.
     Returns the output path on success, or "FAILED" on error.
     """
@@ -807,10 +812,20 @@ def convert_audio(source_path, fmt, output_dir=None):
         candidate = os.path.join(dest_dir, f"{stem}_{counter}{out_ext}")
         counter += 1
 
+    audio_filters = []
+    if normalize is not None:
+        audio_filters.append(f"loudnorm=I={normalize}:TP={DEFAULT_TRUE_PEAK}:LRA=11")
+
     if is_video:
-        cmd = ["ffmpeg", "-i", source_path, "-c:v", "copy", "-c:a", codec, candidate, "-y"]
+        cmd = ["ffmpeg", "-i", source_path, "-c:v", "copy"]
+        if audio_filters:
+            cmd += ["-filter:a", ",".join(audio_filters)]
+        cmd += ["-c:a", codec, candidate, "-y"]
     else:
-        cmd = ["ffmpeg", "-i", source_path, "-c:a", codec, candidate, "-y"]
+        cmd = ["ffmpeg", "-i", source_path]
+        if audio_filters:
+            cmd += ["-filter:a", ",".join(audio_filters)]
+        cmd += ["-c:a", codec, candidate, "-y"]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -847,7 +862,7 @@ def parse_args(argv):
         do_export — True if --export was present
 
     Per-file syntax:
-        <file> [--<fmt> [dest_dir]]
+        <file> [--<fmt> [dest_dir]] [--normalize [lufs]]
 
     Global flags (position-independent):
         --concat   import all files into one timeline
@@ -868,22 +883,38 @@ def parse_args(argv):
         """Return the format string if token is a supported --<fmt> flag, else None."""
         return token[2:].lower() if token.lower() in CONVERT_FLAGS else None
 
+    def is_any_flag(token):
+        return is_convert_flag(token) is not None or token.lower() == "--normalize"
+
     def peek_flag(argv, i):
-        """Return (fmt, output_dir, new_i) if argv[i] is a conversion flag, else (None, None, i)."""
-        if i >= len(argv):
-            return None, None, i
-        fmt = is_convert_flag(argv[i])
-        if not fmt:
-            return None, None, i
-        i += 1
-        output_dir = None
+        """Return (fmt, output_dir, normalize, new_i) after consuming an optional --<fmt> and/or --normalize."""
+        fmt = output_dir = normalize = None
+
         if i < len(argv):
-            next_token = argv[i]
-            ext = os.path.splitext(next_token)[1].lower()
-            if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
-                output_dir = next_token
+            f = is_convert_flag(argv[i])
+            if f:
+                fmt = f
                 i += 1
-        return fmt, output_dir, i
+                # optional output dir
+                if i < len(argv):
+                    next_token = argv[i]
+                    ext = os.path.splitext(next_token)[1].lower()
+                    if not next_token.startswith('-') and ext not in AUDIO_EXTENSIONS:
+                        output_dir = next_token
+                        i += 1
+
+        if i < len(argv) and argv[i].lower() == "--normalize":
+            i += 1
+            if i < len(argv):
+                try:
+                    normalize = float(argv[i])
+                    i += 1
+                except ValueError:
+                    normalize = DEFAULT_LUFS_TARGET
+            else:
+                normalize = DEFAULT_LUFS_TARGET
+
+        return fmt, output_dir, normalize, i
 
     entries = []
     i = 0
@@ -891,7 +922,7 @@ def parse_args(argv):
         token = argv[i]
 
         # Skip a bare flag with no preceding file
-        if is_convert_flag(token):
+        if is_any_flag(token):
             i += 1
             continue
 
@@ -899,7 +930,7 @@ def parse_args(argv):
         # This handles shell-expanded wildcards where the shell splits
         # "*.m4a --wav" into individual filenames before Python sees them.
         sources = []
-        while i < len(argv) and not is_convert_flag(argv[i]):
+        while i < len(argv) and not is_any_flag(argv[i]):
             tok = argv[i]
             if '*' in tok or '?' in tok:
                 sources.extend(sorted(glob.glob(ci_glob(tok))))
@@ -907,12 +938,12 @@ def parse_args(argv):
                 sources.append(tok)
             i += 1
 
-        # Check for an optional conversion flag after the file group
-        fmt, output_dir, i = peek_flag(argv, i)
+        # Check for an optional conversion flag and/or normalize after the file group
+        fmt, output_dir, normalize, i = peek_flag(argv, i)
 
         for source in sources:
             if fmt:
-                converted = convert_audio(source, fmt, output_dir)
+                converted = convert_audio(source, fmt, output_dir, normalize)
                 entries.append((source, converted))
             else:
                 entries.append((source, None))
