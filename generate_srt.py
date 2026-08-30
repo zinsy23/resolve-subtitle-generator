@@ -28,6 +28,7 @@ SHORT_FLAG_MAP = {
     "l": "--list",
     "t": "--timelines",
     "v": "--verbose",
+    "x": "--export-timelines",
 }
 
 
@@ -80,6 +81,8 @@ SUPPORTED_CONVERSION_FORMATS = {"wav", "mp3", "flac", "aac", "ogg", "opus", "aif
 
 PREFS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preferences.json")
 CONV_DIR_FLAGS = {"--conv-dir", "--conversion-dir", "--set-conv-dir", "--set-conversion-dir", "--temp-dir", "--tmp-dir"}
+
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
 
 # Video container extensions and the audio formats verified to work in each.
 # For video files, only the audio stream is transcoded; video is copied as-is.
@@ -910,7 +913,6 @@ def parse_args(argv):
         --concat   import all files into one timeline
         --export   write the SRT file (override for --concat which skips export by default)
     """
-    AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff"}
     CONVERT_FLAGS = {f"--{fmt}" for fmt in SUPPORTED_CONVERSION_FORMATS}
     FLAG_CONCAT, FLAG_EXPORT, FLAG_IMPORT = "--concat", "--export", "--import"
     GLOBAL_FLAGS = {FLAG_CONCAT, FLAG_EXPORT, FLAG_IMPORT} | VERBOSE_FLAGS
@@ -1601,12 +1603,17 @@ def generate_subtitles_for_timeline(project, timeline):
     return True
 
 
-def handle_timelines_flag():
-    """Interactively pick open timelines and generate subtitles in-place for each.
+def pick_timelines_and_run(prompt_verb, action_verb, per_timeline_action):
+    """Shared picker + batch-runner for --timelines and --export-timelines.
 
-    Presents a checkbox picker (arrow keys to move, space to toggle, 'a' to
-    select/deselect all, 'i' to invert, enter to confirm) over every timeline
-    in the current project, then runs subtitle generation for each one picked.
+    Connects to Resolve, lists timelines in the current project, presents a
+    checkbox picker (arrow keys to move, space to toggle, 'a' to select/
+    deselect all, 'i' to invert, enter to confirm), then calls
+    per_timeline_action(project, timeline) for each timeline picked and
+    prints a pass/fail summary. Exits the process; does not return normally.
+
+    prompt_verb  — used in the picker's question, e.g. "generate subtitles for"
+    action_verb  — used in the per-timeline progress line, e.g. "Generating subtitles for"
     """
     resolve = get_resolve()
     if not resolve:
@@ -1624,7 +1631,7 @@ def handle_timelines_flag():
         sys.exit(0)
 
     selected = questionary.checkbox(
-        f"Select timelines to generate subtitles for (project '{project.GetName()}'):",
+        f"Select timelines to {prompt_verb} (project '{project.GetName()}'):",
         choices=names,
     ).ask()
 
@@ -1646,8 +1653,8 @@ def handle_timelines_flag():
             results[name] = False
             continue
 
-        print(f"Generating subtitles for '{name}'...")
-        results[name] = generate_subtitles_for_timeline(project, timeline)
+        print(f"{action_verb} '{name}'...")
+        results[name] = per_timeline_action(project, timeline)
 
     succeeded = [n for n, ok in results.items() if ok]
     failed = [n for n, ok in results.items() if not ok]
@@ -1661,6 +1668,74 @@ def handle_timelines_flag():
     sys.exit(0)
 
 
+def handle_timelines_flag():
+    """Interactively pick open timelines and generate subtitles in-place for each.
+    No SRT export — see generate_subtitles_for_timeline.
+    """
+    pick_timelines_and_run(
+        prompt_verb="generate subtitles for",
+        action_verb="Generating subtitles for",
+        per_timeline_action=generate_subtitles_for_timeline,
+    )
+
+
+def export_existing_subtitles_for_timeline(project, timeline):
+    """Export a timeline's already-existing subtitles as an SRT named after the
+    timeline, in the current working directory. Does not generate anything —
+    if the timeline has no subtitle content yet, this fails (use --timelines
+    to generate first). Reads via get_subtitle_items/get_timeline_framerate
+    and writes via write_srt_file — the same functions generate_srt() uses
+    for the file-import export path, so formatting (multi-line text, bold
+    tags, timecodes) is identical, not reimplemented here.
+    """
+    name = timeline.GetName()
+    project.SetCurrentTimeline(timeline)
+
+    subtitle_items = get_subtitle_items(timeline)
+    if not subtitle_items:
+        print(f"  No existing subtitles found on '{name}' (generate them first with --timelines)")
+        return False
+
+    fps = get_timeline_framerate(timeline)
+    # Strip only characters that are actually unsafe in filenames (Windows'
+    # reserved set; POSIX only forbids '/'), so a timeline name like
+    # "episode.m4a" keeps its dot instead of becoming "episodem4a".
+    safe_name = "".join(c for c in name if c not in '<>:"/\\|?*').strip() or name
+
+    # Unlike the file-import flow (which strips any extension unconditionally,
+    # since it's operating on a real filesystem path), a timeline name isn't
+    # guaranteed to have ever come from a file — "Final.Draft" would be
+    # indistinguishable from "clip.mp4" to a blind splitext. So only strip a
+    # trailing suffix here if it's a known audio/video extension, matching
+    # the common "timeline auto-named from an imported file" case while
+    # leaving anything else (including a name someone genuinely typed with
+    # a dot in it) untouched.
+    stem, ext = os.path.splitext(safe_name)
+    if ext.lower() in AUDIO_EXTENSIONS or ext.lower() in VIDEO_EXTENSIONS:
+        safe_name = stem
+
+    srt_path = os.path.join(os.getcwd(), f"{safe_name}.srt")
+
+    if not write_srt_file(srt_path, subtitle_items, fps):
+        print(f"  Failed to write SRT for '{name}'")
+        return False
+
+    print(f"  Saved: {srt_path}")
+    return True
+
+
+def handle_export_timelines_flag():
+    """Interactively pick open timelines and export their existing subtitles as
+    SRT files, named after each timeline, in the current working directory.
+    Reads what's already there — does not generate or regenerate anything.
+    """
+    pick_timelines_and_run(
+        prompt_verb="export existing subtitles from",
+        action_verb="Exporting subtitles for",
+        per_timeline_action=export_existing_subtitles_for_timeline,
+    )
+
+
 GLOBAL_FLAG_DESCRIPTIONS = {
     "c": "Import all files into a single timeline instead of separate ones.",
     "e": "Write the SRT file (required to export when using --concat).",
@@ -1668,13 +1743,15 @@ GLOBAL_FLAG_DESCRIPTIONS = {
     "l": "List timelines in the currently open project, then exit. Must be standalone.",
     "t": "Interactively pick open timelines to generate subtitles in-place for. Must be standalone.",
     "v": "Show verbose Resolve path-validation and setup diagnostics.",
+    "x": "Interactively pick open timelines and export their existing subtitles as SRTs. Must be standalone.",
 }
 
 
 def print_usage():
     """Print a usage summary. Shown when the script is run with no arguments."""
+    flag_col_width = max(len(f) for f in SHORT_FLAG_MAP.values()) + 1
     global_flag_lines = "\n".join(
-        f"  {SHORT_FLAG_MAP[letter]:<12} -{letter:<3} {desc}"
+        f"  {SHORT_FLAG_MAP[letter]:<{flag_col_width}} -{letter:<3} {desc}"
         for letter, desc in GLOBAL_FLAG_DESCRIPTIONS.items()
     )
     conv_formats = ", ".join(f"--{fmt}" for fmt in sorted(SUPPORTED_CONVERSION_FORMATS))
@@ -1935,6 +2012,10 @@ def main():
     if "--timelines" in argv_lower:
         require_standalone(argv, "--timelines")
         handle_timelines_flag()
+
+    if "--export-timelines" in argv_lower:
+        require_standalone(argv, "--export-timelines")
+        handle_export_timelines_flag()
 
     # Get files to process
     if len(sys.argv) > 1:

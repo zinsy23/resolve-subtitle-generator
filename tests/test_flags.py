@@ -13,6 +13,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "generate_srt.py")
 
 
@@ -158,15 +160,18 @@ class TestShorthandFlags:
         assert "Unrecognized flag" not in result.stdout
 
     def test_unknown_single_letter_rejected(self):
-        result = run(["-x"])
+        # 'z' is not mapped to any flag; keep this test using a letter that's
+        # never expected to become valid, so it doesn't silently start
+        # asserting the wrong thing if a real -z flag is ever added instead.
+        result = run(["-z"])
         assert result.returncode == 1
         assert "Unrecognized flag" in result.stdout
 
     def test_bundle_with_one_bad_letter_rejected(self):
-        result = run(["-cx"])
+        result = run(["-cz"])
         assert result.returncode == 1
         assert "Unrecognized flag" in result.stdout
-        assert "-x" in result.stdout
+        assert "-z" in result.stdout
 
     def test_shorthand_is_case_insensitive(self):
         # -V (uppercase) must expand the same as -v.
@@ -210,12 +215,12 @@ class TestNoArgsUsage:
 
     def test_no_args_usage_lists_all_global_flags(self):
         result = run([])
-        for flag in ("--concat", "--export", "--import", "--list", "--timelines", "--verbose"):
+        for flag in ("--concat", "--export", "--import", "--list", "--timelines", "--export-timelines", "--verbose"):
             assert flag in result.stdout
 
     def test_no_args_usage_lists_all_shorthand_letters(self):
         result = run([])
-        for letter in ("-c", "-e", "-i", "-l", "-t", "-v"):
+        for letter in ("-c", "-e", "-i", "-l", "-t", "-x", "-v"):
             assert letter in result.stdout
 
     def test_no_args_usage_lists_conversion_formats(self):
@@ -269,83 +274,88 @@ class TestTimelinesFlagStandalone:
         assert result.returncode == 1
 
 
+def run_interactive(args, keys, launch_wait=2.0, after_wait=4.0):
+    """Launch generate_srt.py with `args` in a pty, send `keys` (bytes)
+    after the picker has had time to render, then capture all output.
+
+    Returns (output, returncode). returncode is None if the process was
+    still running and had to be force-killed (e.g. an unexpected hang);
+    otherwise it's the process's real exit code.
+
+    Shared by any test that drives generate_srt.py's questionary-based
+    pickers (--timelines, --export-timelines) — they all need a real pty
+    since questionary/prompt_toolkit requires an attached terminal.
+    """
+    import pty
+    import time
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp(sys.executable, [sys.executable, SCRIPT, *args])
+
+    screen = b""
+    returncode = None
+    try:
+        time.sleep(launch_wait)
+        try:
+            screen += os.read(fd, 65536)
+        except OSError:
+            pass
+
+        for chunk in keys:
+            os.write(fd, chunk)
+            time.sleep(0.3)
+
+        time.sleep(after_wait)
+        try:
+            screen += os.read(fd, 65536)
+        except OSError:
+            pass
+
+        done_pid, status = os.waitpid(pid, os.WNOHANG)
+        if done_pid == pid:
+            returncode = os.waitstatus_to_exitcode(status)
+    finally:
+        if returncode is None:
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+            os.waitpid(pid, 0)
+
+    return screen.decode(errors="replace"), returncode
+
+
 class TestTimelinesInteractivePicker:
     """Full end-to-end test of the checkbox picker + subtitle-generation
     pipeline, driven through a real pty since questionary/prompt_toolkit
     needs an attached terminal. Requires a live Resolve project open.
     """
 
-    def _run_interactive(self, args, keys, launch_wait=2.0, after_wait=4.0):
-        """Launch generate_srt.py with `args` in a pty, send `keys` (bytes)
-        after the picker has had time to render, then capture all output.
-
-        Returns (output, returncode). returncode is None if the process was
-        still running and had to be force-killed (e.g. an unexpected hang);
-        otherwise it's the process's real exit code.
-        """
-        import pty
-        import time
-
-        pid, fd = pty.fork()
-        if pid == 0:
-            os.execvp(sys.executable, [sys.executable, SCRIPT, *args])
-
-        screen = b""
-        returncode = None
-        try:
-            time.sleep(launch_wait)
-            try:
-                screen += os.read(fd, 65536)
-            except OSError:
-                pass
-
-            for chunk in keys:
-                os.write(fd, chunk)
-                time.sleep(0.3)
-
-            time.sleep(after_wait)
-            try:
-                screen += os.read(fd, 65536)
-            except OSError:
-                pass
-
-            done_pid, status = os.waitpid(pid, os.WNOHANG)
-            if done_pid == pid:
-                returncode = os.waitstatus_to_exitcode(status)
-        finally:
-            if returncode is None:
-                try:
-                    os.kill(pid, 9)
-                except ProcessLookupError:
-                    pass
-                os.waitpid(pid, 0)
-
-        return screen.decode(errors="replace"), returncode
-
     def test_picker_lists_timelines(self):
         # Launch, capture the initial render, then cancel with Ctrl-C so we
         # don't actually run subtitle generation just to check the listing.
-        output, _ = self._run_interactive(["--timelines"], keys=[b"\x03"], after_wait=1.0)
+        output, _ = run_interactive(["--timelines"], keys=[b"\x03"], after_wait=1.0)
         assert "Select timelines" in output
 
     def test_ctrl_c_cancels_with_exit_1(self):
-        output, returncode = self._run_interactive(["--timelines"], keys=[b"\x03"], after_wait=1.0)
+        output, returncode = run_interactive(["--timelines"], keys=[b"\x03"], after_wait=1.0)
         assert "Cancelled" in output
         assert returncode == 1
 
     def test_case_insensitive_shorthand_uppercase_list(self):
-        output, returncode = self._run_interactive(["-L"], keys=[], launch_wait=2.0, after_wait=0.5)
+        output, returncode = run_interactive(["-L"], keys=[], launch_wait=2.0, after_wait=0.5)
         assert "standalone" not in output
         assert returncode == 0
 
     def test_case_insensitive_shorthand_uppercase_timelines(self):
-        output, _ = self._run_interactive(["-T"], keys=[b"\x03"], after_wait=1.0)
+        output, _ = run_interactive(["-T"], keys=[b"\x03"], after_wait=1.0)
         assert "Select timelines" in output
 
     def test_no_selection_exits_cleanly(self):
         # Enter with nothing toggled on should report no timelines selected,
         # not crash or hang, and exit 0 (distinct from the Ctrl-C/exit-1 path).
-        output, returncode = self._run_interactive(["-t"], keys=[b"\r"], after_wait=1.0)
+        output, returncode = run_interactive(["-t"], keys=[b"\r"], after_wait=1.0)
         assert "No timelines selected" in output
         assert returncode == 0
 
@@ -354,8 +364,113 @@ class TestTimelinesInteractivePicker:
         # (a timeline with no audio fails at CreateSubtitlesFromAudio, per
         # Resolve's own validation — that's expected, not a test failure),
         # this must never mention writing/exporting an SRT file.
-        output, _ = self._run_interactive(["--timelines"], keys=[b" ", b"\r"])
+        output, _ = run_interactive(["--timelines"], keys=[b" ", b"\r"])
         assert "Generating subtitles for" in output
         assert "timeline(s) completed" in output
         assert ".srt" not in output.lower()
         assert "export" not in output.lower()
+
+
+class TestExportTimelinesFlagStandalone:
+    """--export-timelines (like --list and --timelines) must be standalone."""
+
+    def test_rejects_extra_file(self):
+        result = run(["nonexistent.m4a", "--export-timelines"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_rejects_concat(self):
+        result = run(["--export-timelines", "--concat"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_rejects_timelines(self):
+        # --timelines and --export-timelines are different operations
+        # (generate vs. export-what-exists) and must not be combined.
+        result = run(["--timelines", "--export-timelines"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_short_flag_rejects_extra_file(self):
+        result = run(["-x", "nonexistent.m4a"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_bundled_with_concat_rejected(self):
+        result = run(["-xc"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_allows_verbose(self):
+        result = run(["--export-timelines", "--verbose"], timeout=15)
+        assert "standalone" not in result.stdout
+
+
+class TestExportTimelinesInteractivePicker:
+    """End-to-end test of the export-existing-subtitles picker, via pty."""
+
+    def test_picker_prompts_for_export_not_generation(self):
+        output, _ = run_interactive(["--export-timelines"], keys=[b"\x03"], after_wait=1.0)
+        assert "export existing subtitles" in output
+
+    def test_short_flag_launches_same_picker(self):
+        output, _ = run_interactive(["-x"], keys=[b"\x03"], after_wait=1.0)
+        assert "export existing subtitles" in output
+
+    def test_no_selection_exits_cleanly(self):
+        output, returncode = run_interactive(["-x"], keys=[b"\r"], after_wait=1.0)
+        assert "No timelines selected" in output
+        assert returncode == 0
+
+    def test_timeline_without_subtitles_fails_without_crashing(self):
+        # Whatever timeline is first in the list, selecting it here must
+        # never generate anything — only report success or a clean "no
+        # existing subtitles" failure, never crash, and never call the
+        # subtitle-generation pipeline (no "Generating subtitles for").
+        output, _ = run_interactive(["--export-timelines"], keys=[b" ", b"\r"])
+        assert "Exporting subtitles for" in output
+        assert "timeline(s) completed" in output
+        assert "Generating subtitles for" not in output
+
+    def test_media_extension_stripped_from_timeline_name(self):
+        # A timeline auto-named from an imported file (e.g. "230819_003.MP3")
+        # must export as "230819_003.srt" — matching the file-import flow's
+        # naming — not "230819_003.MP3.srt". Finds such a timeline via
+        # --list (choices render in the same order in the picker), navigates
+        # to it with arrow-down, and checks the resulting filename. Skips if
+        # no media-extension-named timeline with subtitles exists to observe.
+        import re
+
+        list_output = run(["--list"]).stdout
+        names = re.findall(r"^\s*\d+\.\s+(.+)$", list_output, re.MULTILINE)
+        media_ext_re = re.compile(r"\.(mp3|wav|m4a|aac|flac|ogg|opus|wma|aiff|mp4|mov|mkv|avi)$", re.IGNORECASE)
+        candidates = [(i, n) for i, n in enumerate(names) if media_ext_re.search(n)]
+        if not candidates:
+            pytest.skip("No timeline with a media-file-shaped name found in the current Resolve project")
+
+        index, target = candidates[0]
+        expected_srt = os.path.splitext(target)[0] + ".srt"
+        wrong_srt = target + ".srt"
+        repo_dir = os.path.dirname(SCRIPT)
+
+        def cleanup():
+            for path in (expected_srt, wrong_srt):
+                full = os.path.join(repo_dir, path)
+                if os.path.exists(full):
+                    os.remove(full)
+
+        cleanup()
+        try:
+            down_arrows = [b"\x1b[B"] * index
+            output, _ = run_interactive(["--export-timelines"], keys=[*down_arrows, b" ", b"\r"])
+            full_expected = os.path.join(repo_dir, expected_srt)
+            full_wrong = os.path.join(repo_dir, wrong_srt)
+            assert os.path.exists(full_expected), (
+                f"Expected {expected_srt} to be created; output was:\n{output}"
+            )
+            assert not os.path.exists(full_wrong), (
+                f"{wrong_srt} should not exist — extension should have been stripped"
+            )
+        finally:
+            cleanup()
+        assert "Traceback" not in output

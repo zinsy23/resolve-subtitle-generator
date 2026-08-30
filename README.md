@@ -204,6 +204,7 @@ These flags apply to the whole command rather than individual files and can be p
 | `--import` | `-i` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
 | `--list` | `-l` | List the timelines in the currently open project, then exit. Must be used standalone — only `--verbose`/`-v` may accompany it; any file or other flag is rejected with an error. |
 | `--timelines` | `-t` | Interactively pick from the timelines already open in the current project and generate subtitles in-place for each one picked. Must be used standalone — same rule as `--list`. |
+| `--export-timelines` | `-x` | Interactively pick from the timelines already open in the current project and export each one's *existing* subtitles as an SRT. Doesn't generate anything — see below. Must be used standalone — same rule as `--list`. |
 | `--verbose` | `-v` | Show verbose Resolve path-validation and setup diagnostics. Quiet by default. |
 
 ### Shorthand flags
@@ -243,6 +244,9 @@ python generate_srt.py --list
 
 # Interactively pick timelines and generate subtitles in-place for them
 python generate_srt.py --timelines
+
+# Interactively pick timelines and bulk-export their existing subtitles as SRTs
+python generate_srt.py --export-timelines
 ```
 
 ## Generating Subtitles for Already-Open Timelines
@@ -266,6 +270,18 @@ Each picked timeline is set as current, its existing subtitle tracks are cleared
 The picker is provided by the [`questionary`](https://github.com/tmbo/questionary) package. Its `j`/`k` bindings match vim's own convention (`j` down, `k` up) by default and aren't configurable from this script. If you personally prefer them reversed, you can edit `prompts/checkbox.py` (and `prompts/select.py` for consistency) in your installed `questionary` package — swap the two `bindings.add("j", ...)` / `bindings.add("k", ...)` targets under `if use_jk_keys:`. This is a local edit to the installed package, not something this repo can set per-user, so it only affects your own machine and won't survive a `pip install --upgrade questionary` or a fresh reinstall (e.g. into a new virtual environment) — you'd need to reapply it.
 
 **This deletes and regenerates every subtitle clip on the timeline from scratch.** Any existing subtitle text/timing is replaced with freshly auto-captioned content. Track-level styling (position, background box, font — anything set in the Inspector's Track tab) is unaffected, since it's a property of the track itself, not the individual clips, and the existing track is reused rather than recreated.
+
+## Bulk-Exporting Subtitles That Already Exist
+
+`--export-timelines` (or `-x`) is for when subtitles already exist on one or more open timelines (e.g. generated earlier with `--timelines`, or by hand in the UI) and you now want them saved out as SRT files, in bulk, without doing it one at a time.
+
+```bash
+python generate_srt.py --export-timelines
+```
+
+This opens the same checkbox picker as `--timelines` (same keys — arrows/`j`/`k`, space, `a`, `i`, enter), but the action is different: for each timeline picked, it **only reads what's already there** — it does not generate, regenerate, or touch the timeline's content in any way. Each SRT is named after its timeline (e.g. timeline `"Interview"` → `Interview.srt`) and saved in the directory you ran the command from — the same directory-relative behavior as the rest of the script, so a shell alias that calls this script from a fixed path still saves into wherever your shell's current directory is when you run it.
+
+If a picked timeline has no subtitle content yet, that one is reported as failed ("generate them first with `--timelines`") and the rest of the batch still runs — nothing is generated as a side effect of trying to export it. A summary of successes/failures prints at the end, same as `--timelines`.
 
 ## Troubleshooting
 
