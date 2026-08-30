@@ -17,6 +17,50 @@ import csv
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+# Single-letter shorthand for global flags. Letters may be bundled behind one
+# dash (e.g. -cv expands to --concat --verbose) — every letter in a bundle
+# must be recognized or the whole token is rejected as an unrecognized flag.
+SHORT_FLAG_MAP = {
+    "c": "--concat",
+    "e": "--export",
+    "i": "--import",
+    "l": "--list",
+    "v": "--verbose",
+}
+
+
+def expand_short_flags(argv):
+    """Expand single-dash shorthand (bundled or not) into canonical --long flags.
+
+    "-v" -> ["--verbose"], "-cv" -> ["--concat", "--verbose"].
+    Tokens that aren't a pure letters-only single-dash flag (e.g. "--long",
+    plain filenames, "-") pass through unchanged. A bundle containing any
+    unrecognized letter errors out immediately rather than guessing.
+    """
+    expanded = []
+    for token in argv:
+        is_short_bundle = (
+            len(token) > 1
+            and token[0] == '-'
+            and token[1] != '-'
+            and token[1:].isalpha()
+        )
+        if not is_short_bundle:
+            expanded.append(token)
+            continue
+
+        letters = token[1:].lower()
+        unknown = [c for c in letters if c not in SHORT_FLAG_MAP]
+        if unknown:
+            print(f"Error: Unrecognized flag '{token}' (unknown shorthand: {', '.join('-' + c for c in unknown)})")
+            sys.exit(1)
+
+        expanded.extend(SHORT_FLAG_MAP[c] for c in letters)
+    return expanded
+
+
+sys.argv = [sys.argv[0]] + expand_short_flags(sys.argv[1:])
+
 # --verbose / -v enables the noisy Resolve path-validation diagnostics; quiet by default.
 VERBOSE_FLAGS = {"--verbose", "-v"}
 VERBOSE = bool(VERBOSE_FLAGS & {a.lower() for a in sys.argv})

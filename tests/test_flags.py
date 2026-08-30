@@ -116,3 +116,70 @@ class TestVerboseOutputLevel:
             "FINAL PATH CONFIGURATION" in result.stderr
             or "=== Starting path validation ===" in result.stdout
         )
+
+
+class TestShorthandFlags:
+    """-c/-e/-i/-l/-v are shorthand for --concat/--export/--import/--list/--verbose,
+    and may be bundled behind a single dash (-cv == -c -v)."""
+
+    def test_short_list_alone(self):
+        result = run(["-l"])
+        assert "standalone" not in result.stdout
+        assert result.returncode == 0
+
+    def test_short_verbose_matches_long_form_output(self):
+        long_result = run(["--list", "--verbose"])
+        short_result = run(["-l", "-v"])
+        assert ("FINAL PATH CONFIGURATION" in long_result.stderr) == (
+            "FINAL PATH CONFIGURATION" in short_result.stderr
+        )
+
+    def test_bundled_list_and_verbose(self):
+        result = run(["-lv"])
+        assert "standalone" not in result.stdout
+        assert "FINAL PATH CONFIGURATION" in result.stderr
+
+    def test_bundled_verbose_and_list_reverse_order(self):
+        result = run(["-vl"])
+        assert "standalone" not in result.stdout
+        assert "FINAL PATH CONFIGURATION" in result.stderr
+
+    def test_bundled_list_and_concat_rejected_as_non_standalone(self):
+        # -l plus any other global flag violates --list's standalone rule,
+        # same as if they'd been spelled out long-form.
+        result = run(["-lc"])
+        assert result.returncode == 1
+        assert "standalone" in result.stdout
+
+    def test_short_import_and_export_bundle(self):
+        result = run(["-ie", "nonexistent.m4a"])
+        # Should not be rejected as an unrecognized flag; fails later only
+        # because the file doesn't exist / no Resolve project state applies.
+        assert "Unrecognized flag" not in result.stdout
+
+    def test_unknown_single_letter_rejected(self):
+        result = run(["-x"])
+        assert result.returncode == 1
+        assert "Unrecognized flag" in result.stdout
+
+    def test_bundle_with_one_bad_letter_rejected(self):
+        result = run(["-cx"])
+        assert result.returncode == 1
+        assert "Unrecognized flag" in result.stdout
+        assert "-x" in result.stdout
+
+    def test_shorthand_position_independent(self):
+        result_a = run(["-l", "-v"])
+        result_b = run(["-v", "-l"])
+        assert ("standalone" in result_a.stdout) == ("standalone" in result_b.stdout)
+        assert result_a.returncode == result_b.returncode
+
+    def test_duplicate_flag_via_short_and_long_is_harmless(self):
+        result = run(["-l", "--list"])
+        assert result.returncode == 0
+        assert "standalone" not in result.stdout
+
+    def test_double_dash_flag_not_treated_as_shorthand_bundle(self):
+        # A --long flag must never be run through single-letter expansion.
+        result = run(["--list", "--verbose"])
+        assert "Unrecognized flag" not in result.stdout

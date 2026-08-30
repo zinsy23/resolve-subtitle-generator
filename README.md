@@ -195,13 +195,27 @@ Once set, all conversions save to that directory automatically — no need to sp
 
 These flags apply to the whole command rather than individual files and can be placed anywhere in the argument list.
 
-| Flag | Description |
-|------|-------------|
-| `--concat` | Import all files into a single timeline instead of separate ones. Subtitles are generated across the entire timeline. Does not export an SRT by default — use with `--export` to save one. |
-| `--export` | Write the SRT file. Redundant for normal per-file use (always exports), but required to export when using `--concat`. |
-| `--import` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
-| `--list` | List the timelines in the currently open project, then exit. Must be used standalone — only `--verbose`/`-v` may accompany it; any file or other flag is rejected with an error. |
-| `--verbose` / `-v` | Show verbose Resolve path-validation and setup diagnostics. Quiet by default. |
+| Flag | Shorthand | Description |
+|------|-----------|-------------|
+| `--concat` | `-c` | Import all files into a single timeline instead of separate ones. Subtitles are generated across the entire timeline. Does not export an SRT by default — use with `--export` to save one. |
+| `--export` | `-e` | Write the SRT file. Redundant for normal per-file use (always exports), but required to export when using `--concat`. |
+| `--import` | `-i` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
+| `--list` | `-l` | List the timelines in the currently open project, then exit. Must be used standalone — only `--verbose`/`-v` may accompany it; any file or other flag is rejected with an error. |
+| `--verbose` | `-v` | Show verbose Resolve path-validation and setup diagnostics. Quiet by default. |
+
+### Shorthand flags
+
+Single-letter shorthand can be bundled behind one dash, so `-cv` means the same as `--concat --verbose`. Order within a bundle doesn't matter (`-cv` and `-vc` are equivalent), and shorthand can be freely mixed with long-form flags. Any unrecognized letter in a bundle is rejected with an error rather than silently ignored.
+
+```bash
+# Same as: python generate_srt.py "*.m4a" --concat --export
+python generate_srt.py "*.m4a" -ce
+
+# Same as: python generate_srt.py --list --verbose
+python generate_srt.py -lv
+```
+
+Conversion format flags (`--wav`, `--mp3`, etc.) and conversion-directory flags (`--conv-dir` and its aliases) don't have shorthand — they select a specific format or take a path argument, so a single-letter code wouldn't be safely guessable (e.g. `--aac` vs `--aiff` would both want `-a`).
 
 ### Examples
 
