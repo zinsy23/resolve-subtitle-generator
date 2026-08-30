@@ -13,6 +13,7 @@ import tempfile
 import subprocess
 from pydub import AudioSegment
 import csv
+import questionary
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,7 @@ SHORT_FLAG_MAP = {
     "e": "--export",
     "i": "--import",
     "l": "--list",
+    "t": "--timelines",
     "v": "--verbose",
 }
 
@@ -1552,11 +1554,119 @@ def handle_list_flag():
     sys.exit(0)
 
 
+def generate_subtitles_in_timeline(timeline):
+    """Core subtitle-generation steps shared by the file-import pipeline
+    (generate_srt) and the open-timeline pipeline (generate_subtitles_for_timeline):
+    clear existing subtitle tracks, ensure tracks exist, auto-caption, wait for
+    completion, verify. Does not export — callers decide what to do with the result.
+    """
+    if not clear_subtitle_tracks(timeline):
+        logging.error("Failed to clear subtitle tracks")
+        return False
+
+    if not setup_timeline_tracks(timeline):
+        logging.error("Failed to setup timeline tracks")
+        return False
+
+    if not create_subtitles_from_audio(timeline):
+        logging.error("Failed to generate subtitles")
+        return False
+
+    if not wait_for_subtitles(timeline):
+        logging.error("Timed out waiting for subtitles")
+        return False
+
+    if not verify_timeline(timeline):
+        logging.error("Timeline no longer valid after subtitle generation")
+        return False
+
+    return True
+
+
+def generate_subtitles_for_timeline(project, timeline):
+    """Generate subtitles in-place for an already-open timeline. No SRT export —
+    subtitles are left in the timeline itself (e.g. for later burn-in on export).
+    Assumes the timeline already has audio; if not, Resolve's own API calls
+    fail naturally and that failure is reported as-is.
+    """
+    name = timeline.GetName()
+
+    project.SetCurrentTimeline(timeline)
+    time.sleep(1)
+
+    if not generate_subtitles_in_timeline(timeline):
+        print(f"  Failed to generate subtitles for '{name}' (does it have audio?)")
+        return False
+
+    return True
+
+
+def handle_timelines_flag():
+    """Interactively pick open timelines and generate subtitles in-place for each.
+
+    Presents a checkbox picker (arrow keys to move, space to toggle, 'a' to
+    select/deselect all, 'i' to invert, enter to confirm) over every timeline
+    in the current project, then runs subtitle generation for each one picked.
+    """
+    resolve = get_resolve()
+    if not resolve:
+        print("Error: Could not connect to DaVinci Resolve. Is it running?")
+        sys.exit(1)
+
+    project = get_current_project()
+    if not project:
+        print("Error: No project is currently open in Resolve.")
+        sys.exit(1)
+
+    names = list_timelines(project)
+    if not names:
+        print(f"No timelines found in project '{project.GetName()}'.")
+        sys.exit(0)
+
+    selected = questionary.checkbox(
+        f"Select timelines to generate subtitles for (project '{project.GetName()}'):",
+        choices=names,
+    ).ask()
+
+    if selected is None:
+        print("Cancelled.")
+        sys.exit(1)
+    if not selected:
+        print("No timelines selected.")
+        sys.exit(0)
+
+    all_timelines = [project.GetTimelineByIndex(i) for i in range(1, project.GetTimelineCount() + 1)]
+    timelines_by_name = {t.GetName(): t for t in all_timelines if t}
+
+    results = {}
+    for name in selected:
+        timeline = timelines_by_name.get(name)
+        if not timeline:
+            print(f"Skipping '{name}': no longer found in project")
+            results[name] = False
+            continue
+
+        print(f"Generating subtitles for '{name}'...")
+        results[name] = generate_subtitles_for_timeline(project, timeline)
+
+    succeeded = [n for n, ok in results.items() if ok]
+    failed = [n for n, ok in results.items() if not ok]
+
+    print(f"\n{len(succeeded)}/{len(results)} timeline(s) completed successfully")
+    if failed:
+        print("Failed:")
+        for name in failed:
+            print(f"  - {name}")
+        sys.exit(1)
+    sys.exit(0)
+
+
 GLOBAL_FLAG_DESCRIPTIONS = {
     "c": "Import all files into a single timeline instead of separate ones.",
     "e": "Write the SRT file (required to export when using --concat).",
     "i": "Import into Resolve without generating subtitles.",
     "l": "List timelines in the currently open project, then exit. Must be standalone.",
+    "t": "Interactively pick open timelines to generate subtitles in-place for. Must be standalone.",
     "v": "Show verbose Resolve path-validation and setup diagnostics.",
 }
 
@@ -1685,24 +1795,7 @@ def generate_srt(import_paths, timeline_name, srt_output_path, do_export=True, d
             logging.info("Import complete (subtitle generation skipped)")
             return True
 
-        if not clear_subtitle_tracks(timeline):
-            logging.error("Failed to clear subtitle tracks")
-            return False
-
-        if not setup_timeline_tracks(timeline):
-            logging.error("Failed to setup timeline tracks")
-            return False
-
-        if not create_subtitles_from_audio(timeline):
-            logging.error("Failed to generate subtitles")
-            return False
-
-        if not wait_for_subtitles(timeline):
-            logging.error("Timed out waiting for subtitles")
-            return False
-
-        if not verify_timeline(timeline):
-            logging.error("Timeline no longer valid after subtitle generation")
+        if not generate_subtitles_in_timeline(timeline):
             return False
 
         if not do_export:
@@ -1810,6 +1903,21 @@ def clear_subtitle_tracks(timeline):
         logging.error(f"Error clearing subtitle tracks: {str(e)}")
         return False
 
+
+def require_standalone(argv, flag):
+    """Exit with an error if any argument besides `flag` (and --verbose/-v) is present.
+
+    Used for flags like --list and --timelines that don't compose with files
+    or other global flags — they do one specific thing and exit.
+    """
+    allowed = {flag} | VERBOSE_FLAGS
+    extra = [a for a in argv if a.lower() not in allowed]
+    if extra:
+        print(f"Error: {flag} must be used standalone (only --verbose/-v may accompany it).")
+        print(f"  Unexpected argument(s): {' '.join(extra)}")
+        sys.exit(1)
+
+
 def main():
     # Handle conv-dir preference flags before anything else
     argv = sys.argv[1:]
@@ -1821,13 +1929,12 @@ def main():
             handle_conv_dir_flag(value)
 
     if "--list" in argv_lower:
-        allowed = {"--list"} | VERBOSE_FLAGS
-        extra = [a for a in argv if a.lower() not in allowed]
-        if extra:
-            print("Error: --list must be used standalone (only --verbose/-v may accompany it).")
-            print(f"  Unexpected argument(s): {' '.join(extra)}")
-            sys.exit(1)
+        require_standalone(argv, "--list")
         handle_list_flag()
+
+    if "--timelines" in argv_lower:
+        require_standalone(argv, "--timelines")
+        handle_timelines_flag()
 
     # Get files to process
     if len(sys.argv) > 1:

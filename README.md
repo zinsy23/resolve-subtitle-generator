@@ -203,6 +203,7 @@ These flags apply to the whole command rather than individual files and can be p
 | `--export` | `-e` | Write the SRT file. Redundant for normal per-file use (always exports), but required to export when using `--concat`. |
 | `--import` | `-i` | Import files into Resolve without generating subtitles. Works with and without `--concat`. Useful when you just need the conversion and import, not the subtitles. |
 | `--list` | `-l` | List the timelines in the currently open project, then exit. Must be used standalone — only `--verbose`/`-v` may accompany it; any file or other flag is rejected with an error. |
+| `--timelines` | `-t` | Interactively pick from the timelines already open in the current project and generate subtitles in-place for each one picked. Must be used standalone — same rule as `--list`. |
 | `--verbose` | `-v` | Show verbose Resolve path-validation and setup diagnostics. Quiet by default. |
 
 ### Shorthand flags
@@ -239,7 +240,32 @@ python generate_srt.py "*.mp4" --mp3 --import --concat
 
 # List the timelines in the currently open project
 python generate_srt.py --list
+
+# Interactively pick timelines and generate subtitles in-place for them
+python generate_srt.py --timelines
 ```
+
+## Generating Subtitles for Already-Open Timelines
+
+`--timelines` (or `-t`) is for a different situation than the rest of this script: timelines that already exist in the current Resolve project — created while editing, not by importing a file through this script — where you just want subtitles generated in place (e.g. to burn in later on export), not an external `.srt` file.
+
+```bash
+python generate_srt.py --timelines
+```
+
+This opens a checkbox picker over every timeline in the current project:
+
+- **↑ / ↓** (or **j** / **k**, vim-style: `j` down, `k` up) — move the cursor
+- **Space** — toggle the highlighted timeline on/off
+- **a** — select all / deselect all
+- **i** — invert the current selection
+- **Enter** — confirm and start generating subtitles for everything picked
+
+Each picked timeline is set as current, its existing subtitle tracks are cleared, and subtitles are generated from its audio the same way as the rest of this script — but **no SRT file is written**. If a timeline has no audio, Resolve's own subtitle-generation call fails naturally and that timeline is reported as failed in the summary; the rest of the batch still runs. A summary of successes/failures prints at the end, and the exit code is non-zero if anything failed.
+
+The picker is provided by the [`questionary`](https://github.com/tmbo/questionary) package. Its `j`/`k` bindings match vim's own convention (`j` down, `k` up) by default and aren't configurable from this script. If you personally prefer them reversed, you can edit `prompts/checkbox.py` (and `prompts/select.py` for consistency) in your installed `questionary` package — swap the two `bindings.add("j", ...)` / `bindings.add("k", ...)` targets under `if use_jk_keys:`. This is a local edit to the installed package, not something this repo can set per-user, so it only affects your own machine and won't survive a `pip install --upgrade questionary` or a fresh reinstall (e.g. into a new virtual environment) — you'd need to reapply it.
+
+**This deletes and regenerates every subtitle clip on the timeline from scratch.** Any existing subtitle text/timing is replaced with freshly auto-captioned content. Track-level styling (position, background box, font — anything set in the Inspector's Track tab) is unaffected, since it's a property of the track itself, not the individual clips, and the existing track is reused rather than recreated.
 
 ## Troubleshooting
 
