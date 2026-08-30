@@ -1454,6 +1454,40 @@ def get_current_project():
         logging.error(f"Error getting current project: {str(e)}")
         return None
 
+def list_timelines(project):
+    """Return the names of all timelines in the given project, in timeline index order."""
+    count = project.GetTimelineCount()
+    names = []
+    for i in range(1, count + 1):
+        timeline = project.GetTimelineByIndex(i)
+        if timeline:
+            names.append(timeline.GetName())
+    return names
+
+
+def handle_list_flag():
+    """Print the timelines in the current project and exit."""
+    resolve = get_resolve()
+    if not resolve:
+        print("Error: Could not connect to DaVinci Resolve. Is it running?")
+        sys.exit(1)
+
+    project = get_current_project()
+    if not project:
+        print("Error: No project is currently open in Resolve.")
+        sys.exit(1)
+
+    names = list_timelines(project)
+    if not names:
+        print(f"No timelines found in project '{project.GetName()}'.")
+        sys.exit(0)
+
+    print(f"Timelines in project '{project.GetName()}':")
+    for i, name in enumerate(names, 1):
+        print(f"  {i}. {name}")
+    sys.exit(0)
+
+
 def build_timeline(project, media_pool, import_paths, timeline_name):
     """Import all files and create a timeline with all clips in order.
 
@@ -1681,6 +1715,9 @@ def main():
             idx = argv_lower.index(flag)
             value = argv[idx + 1] if idx + 1 < len(argv) else None
             handle_conv_dir_flag(value)
+
+    if "--list" in argv_lower:
+        handle_list_flag()
 
     # Get files to process
     if len(sys.argv) > 1:
